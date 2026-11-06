@@ -1,64 +1,64 @@
 /* Sổ Sticker rules: no DOM, so tools/test-hunt.js can check every page in Node.
-   Each page of the book asks for a set of different stickers. Every peeled sticker goes into one box; three of a
-   kind there merge. A merged sticker the page wants flies into the book; any other triple (junk) just clears.
-   The page is won when every sticker it wants is in the book; it is lost when the box is full and nothing can move. */
+   A page is a run of missions, one per spread of the book; each mission asks for a set of different stickers.
+   A peeled sticker the current mission wants flies straight into the book. Any other sticker waits in the box
+   until a later mission wants it: when the book turns to that mission, it flies in from the box.
+   The page is won when the last mission is full; it is lost when the box is full and nothing peelable is wanted. */
 (function (root) {
   'use strict';
   var PO = root.PO = root.PO || {};
-  var MAX_CAP = 8;   // the box never shows more than MAX_CAP - 1 slots; the last index is the spare for a full-box third
+  var MAX_CAP = 8;
 
   function rngOf(seed) { var s = seed >>> 0; return function () { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
   function shuffle(a, rng) { for (var i = a.length - 1; i > 0; i--) { var j = Math.floor(rng() * (i + 1)), t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
 
-  /* ---------- the box ---------- */
-  function Model(targets, cap) {
+  /* ---------- missions and the box ---------- */
+  function Model(missions, cap) {
+    this.missions = missions;
     this.cap = cap;
-    this.wanted = {};
-    var w = this.wanted;
-    targets.forEach(function (t) { w[t] = true; });
-    this.left = targets.length;
+    this.cur = 0;
     this.box = [];
     for (var i = 0; i < MAX_CAP; i++) this.box.push(null);
+    this.want();
   }
-  Model.prototype.count = function (type) { var n = 0; for (var i = 0; i < MAX_CAP; i++) if (this.box[i] && this.box[i].type === type && !this.box[i].clearing) n++; return n; };
+  Model.prototype.want = function () {
+    var w = this.wanted = {};
+    this.missions[this.cur].forEach(function (t) { w[t] = true; });
+    this.left = this.missions[this.cur].length;
+  };
   Model.prototype.used = function () { var n = 0; for (var i = 0; i < MAX_CAP; i++) if (this.box[i]) n++; return n; };
   Model.prototype.free = function () { for (var i = 0; i < this.cap; i++) if (!this.box[i]) return i; return -1; };
   Model.prototype.room = function () { var n = 0; for (var i = 0; i < this.cap; i++) if (!this.box[i]) n++; return n; };
-  /* A third of a kind always fits: it merges with its pair at once, even when the box is full. */
-  Model.prototype.canPlace = function (type) { return this.count(type) === 2 || this.free() >= 0; };
-  /* Puts a peeled sticker into a box slot. Returns null when it cannot go anywhere. */
+  Model.prototype.canPlace = function (type) { return !!this.wanted[type] || this.free() >= 0; };
+  /* A wanted sticker goes to the book (target); any other takes a box slot. Returns null when neither fits. */
   Model.prototype.place = function (item) {
+    if (this.wanted[item.type]) { delete this.wanted[item.type]; this.left--; item.target = true; return item; }
     var at = this.free();
-    if (at < 0 && this.count(item.type) === 2) {
-      for (var i = this.cap; i < MAX_CAP; i++) if (!this.box[i]) { at = i; break; }
-    }
     if (at < 0) return null;
-    this.box[at] = item; item.slot = at;
-    item.target = !!this.wanted[item.type];
+    this.box[at] = item; item.slot = at; item.target = false;
     return item;
   };
-  /* Triples whose three stickers have all landed in the box. */
-  Model.prototype.ready = function () {
-    var by = {}, out = [];
-    this.box.forEach(function (it) { if (it && it.landed && !it.clearing) (by[it.type] = by[it.type] || []).push(it); });
-    Object.keys(by).forEach(function (t) { if (by[t].length >= 3) out.push(by[t].slice(0, 3)); });
-    return out;
-  };
-  /* Takes a triple out of the box. Returns true when it was one the page wanted (it goes into the book). */
-  Model.prototype.clear = function (three) {
-    var b = this.box, t = three[0].type;
-    three.forEach(function (it) { b[it.slot] = null; });
-    if (!this.wanted[t]) return false;
-    delete this.wanted[t]; this.left--;
+  Model.prototype.missionDone = function () { return this.left === 0; };
+  Model.prototype.last = function () { return this.cur === this.missions.length - 1; };
+  Model.prototype.done = function () { return this.last() && this.missionDone(); };
+  /* Takes a box sticker into the book when the open mission wants it. Returns true when it moved. */
+  Model.prototype.claim = function (it) {
+    if (this.box[it.slot] !== it || !this.wanted[it.type]) return false;
+    this.box[it.slot] = null; delete this.wanted[it.type]; this.left--;
     return true;
   };
-  Model.prototype.done = function () { return this.left === 0; };
+  /* Opens the next mission. Returns the box stickers it wants: they leave the box for the book. */
+  Model.prototype.next = function () {
+    this.cur++;
+    this.want();
+    var self = this;
+    return this.box.filter(function (it) { return it && self.claim(it); });
+  };
 
   /* ---------- dealing ----------
-     Walks one removal order of the sheet and gives every sticker a type so the box never holds more than `peak`
-     on the way: each triple opens, grows and finishes like tiles in a tray. Junk triples tend to be dealt first, so
-     the page's own stickers lie deeper. That walk is the page's proof of a win. */
-  function dealer(targets, junkTypes, junkTriples, peak) {
+     Walks one removal order of the sheet and gives each sticker to a mission: usually the current one, sometimes
+     a later one while the box (later missions' stickers already peeled) has room under `peak`. Then each mission's
+     stickers get its designs. That walk is the page's proof of a win. */
+  function dealer(missions, peak, spread) {
     return function (list, rng) {
       var left = list.map(function (s) { return s.blockers.length; }), order = [], exposed = [];
       list.forEach(function (s, i) { if (!left[i]) exposed.push(i); });
@@ -67,106 +67,102 @@
         order.push(id);
         list[id].blocks.forEach(function (b) { if (--left[b] === 0) exposed.push(b); });
       }
-      /* The pool is taken from its end; junk gets higher keys, so it is mostly dealt before the page's stickers. */
-      var pool = targets.map(function (t) { return { t: t, k: rng() }; });
-      for (var j = 0; j < junkTriples; j++) pool.push({ t: junkTypes[j % junkTypes.length], k: 0.45 + rng() });
-      pool.sort(function (a, b) { return a.k - b.k; });
-      pool = pool.map(function (o) { return o.t; });
-      var types = {}, open = {}, box = 0;
+      var M = missions.length, room = missions.map(function (m) { return m.length; }), held = missions.map(function () { return 0; });
+      var cur = 0, box = 0, ids = missions.map(function () { return []; });
       order.forEach(function (id) {
-        var singles = [], pairs = [], fresh = -1;
-        for (var ty in open) { if (open[ty] === 1) singles.push(ty); else if (open[ty] === 2) pairs.push(ty); }
-        for (var q = pool.length - 1; q >= 0; q--) if (!open[pool[q]]) { fresh = q; break; }
-        var opts = [];
-        if (fresh >= 0 && box + 1 <= peak - 1) opts.push('new');
-        if (singles.length && box + 1 <= peak - 1) opts.push('grow');
-        if (pairs.length) opts.push('finish', 'finish');
-        if (!opts.length) opts.push(singles.length ? 'grow' : fresh >= 0 ? 'new' : 'finish');
-        var mv = opts[Math.floor(rng() * opts.length)], type;
-        if (mv === 'new') { type = pool.splice(fresh, 1)[0]; open[type] = 1; box++; }
-        else if (mv === 'grow') { type = singles[Math.floor(rng() * singles.length)]; open[type] = 2; box++; }
-        else { type = pairs[Math.floor(rng() * pairs.length)]; delete open[type]; box -= 2; }
-        types[id] = +type;
+        var later = [];
+        if (box < peak - 1) for (var m = cur + 1; m < M; m++) if (room[m] > 0) later.push(m);
+        /* A later mission, the next one most often. */
+        var to = later.length && rng() < spread ? later[Math.floor(Math.pow(rng(), 2) * later.length)] : cur;
+        room[to]--; ids[to].push(id);
+        if (to !== cur) { held[to]++; box++; }
+        while (cur < M && room[cur] === 0) { cur++; if (cur < M) { box -= held[cur]; held[cur] = 0; } }
       });
+      var types = {};
+      missions.forEach(function (m, k) { var ts = shuffle(m.slice(), rng); ids[k].forEach(function (id, j) { types[id] = ts[j]; }); });
       return { types: types, order: order };
     };
   }
 
   /* ---------- the pages ----------
-     Each page collects one album's stickers; junk comes from another album. Ids are album * 10 + design.
-     targets: different stickers the page wants (three of each on the sheet); junkTriples: triples of junk. */
+     missions: how many stickers each mission asks for; cap: box slots; bottom: how much of the sheet lies in its
+     first layer (less means deeper stacks); spread: how often the proof peels a sticker for a later mission.
+     Each mission collects one album; ids are album * 10 + design. Tuned so a careless player wins less and less
+     often, from every game on page 1 to about one in four by page 11; Hard pages sit near one in ten or less. */
   var PAGES = [
-    { targets: 3, junkTypes: 2, junkTriples: 2, cap: 6, mods: {} },
-    { targets: 4, junkTypes: 2, junkTriples: 2, cap: 6, mods: {} },
-    { targets: 4, junkTypes: 3, junkTriples: 3, cap: 6, mods: { tape: 0.1 } },
-    { targets: 5, junkTypes: 3, junkTriples: 3, cap: 5, mods: {} },
-    { targets: 5, junkTypes: 3, junkTriples: 4, cap: 5, mods: { tape: 0.1 } },
-    { targets: 5, junkTypes: 4, junkTriples: 5, cap: 4, mods: { tape: 0.1 }, hard: true },
-    { targets: 6, junkTypes: 3, junkTriples: 4, cap: 5, mods: { mystery: 0.12 } },
-    { targets: 6, junkTypes: 4, junkTriples: 5, cap: 5, mods: { tape: 0.1 } },
-    { targets: 7, junkTypes: 4, junkTriples: 5, cap: 5, mods: { tape: 0.1, mystery: 0.1 } },
-    { targets: 7, junkTypes: 4, junkTriples: 6, cap: 4, mods: { tape: 0.1 }, hard: true },
-    { targets: 8, junkTypes: 4, junkTriples: 5, cap: 5, mods: { mystery: 0.12 } },
-    { targets: 8, junkTypes: 5, junkTriples: 7, cap: 4, mods: { tape: 0.1, mystery: 0.1 }, hard: true }
+    { missions: [4, 4], cap: 3, bottom: 0.3, spread: 0.3, mods: {} },
+    { missions: [5, 5], cap: 3, bottom: 0.65, spread: 0.3, mods: {} },
+    { missions: [5, 5, 5], cap: 4, bottom: 0.65, spread: 0.5, mods: {} },
+    { missions: [6, 6, 6], cap: 3, bottom: 0.3, spread: 0.7, mods: {} },
+    { missions: [6, 7, 6], cap: 2, bottom: 0.65, spread: 0.5, mods: {} },
+    { missions: [7, 7, 7], cap: 3, bottom: 0.5, spread: 0.7, mods: {}, hard: true },
+    { missions: [6, 6, 6, 6], cap: 3, bottom: 0.3, spread: 0.7, mods: { mystery: 0.12 } },
+    { missions: [7, 7, 7, 6], cap: 2, bottom: 0.3, spread: 0.7, mods: {} },
+    { missions: [7, 8, 7, 8], cap: 2, bottom: 0.5, spread: 0.5, mods: { mystery: 0.1 } },
+    { missions: [9, 9, 9], cap: 3, bottom: 0.6, spread: 0.6, mods: { mystery: 0.08 }, hard: true },
+    { missions: [8, 8, 8, 8], cap: 4, bottom: 0.4, spread: 0.5, mods: { mystery: 0.12 } },
+    { missions: [9, 10, 9, 10], cap: 3, bottom: 0.45, spread: 0.6, mods: { mystery: 0.08 }, hard: true }
   ];
   var SHAPES = ['full', 'circle', 'heart', 'diamond', 'full', 'butterfly', 'circle', 'arch', 'heart', 'diamond', 'full', 'butterfly'];
-  PAGES.forEach(function (p, i) { p.album = i % 6; p.junkAlbum = (i + 3) % 6; });
+  PAGES.forEach(function (p, i) { p.album = i % 6; });
+  /* The album mission k of page i collects. */
+  function albumOf(i, k) { return (i + k) % 6; }
+  /* Stickers that look alike at sticker size (pufferfish and sun, starfish and star) never share a page, or a
+     player takes one for the other and thinks the book is broken. */
+  var LOOKALIKE = { 38: 49, 49: 38, 34: 42, 42: 34 };
   /* Everything the sheet engine and the page need to set up page i. */
   function build(i) {
-    var p = PAGES[i], rng = rngOf(9157 + i * 7919);
-    var targets = shuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], rng).slice(0, p.targets).map(function (d) { return p.album * 10 + d; });
-    var junk = shuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], rng).slice(0, p.junkTypes).map(function (d) { return p.junkAlbum * 10 + d; });
+    var p = PAGES[i], rng = rngOf(9157 + i * 7919), used = {};
+    var missions = p.missions.map(function (n, k) {
+      var pick = shuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], rng).map(function (d) { return albumOf(i, k) * 10 + d; })
+        .filter(function (id) { return !used[LOOKALIKE[id]]; }).slice(0, n);
+      pick.forEach(function (id) { used[id] = true; });
+      return pick;
+    });
+    var count = missions.reduce(function (s, m) { return s + m.length; }, 0);
     var cfg = {
       n: i + 1, seed: 4241 + i * 7919, album: p.album, mixed: true, belt: true, quilt: true,
-      count: (p.targets + p.junkTriples) * 3, bottom: 0.5, shape: SHAPES[i % SHAPES.length], mods: p.mods, tier: 'normal',
-      peak: p.cap, triples: p.targets + p.junkTriples, pool: targets, deal: dealer(targets, junk, p.junkTriples, p.cap - 1)
+      count: count, bottom: p.bottom || 0.5, shape: SHAPES[i % SHAPES.length], mods: p.mods, tier: 'normal',
+      peak: p.cap, triples: Math.ceil(count / 3), pool: [], deal: dealer(missions, p.cap, p.spread)
     };
-    return { def: p, cfg: cfg, targets: targets, junk: junk };
+    return { def: p, cfg: cfg, missions: missions, targets: [].concat.apply([], missions) };
   }
 
   /* ---------- a bot, for balance ----------
-     'smart' finishes pairs first, grows pairs, and opens new kinds only with room to spare;
-     'random' peels anything it can. Returns { win, junk } where junk counts junk stickers peeled. */
-  function play(level, targets, cap, style, seed) {
-    var m = new Model(targets, cap), st = level.stickers, gone = st.map(function () { return false; }), rng = rngOf(seed), merges = 0, junk = 0;
+     'smart' plays like a player who only sees the current mission: it takes what the mission wants, else digs
+     out the sticker that covers the most wanted ones (it cannot know what later missions want); 'random' peels
+     anything that fits. Returns { win, junk } where junk counts stickers that went to the box. */
+  function play(level, missions, cap, style, seed) {
+    var m = new Model(missions, cap), st = level.stickers, gone = st.map(function () { return false; }), rng = rngOf(seed), junk = 0;
     while (!m.done()) {
-      var free = st.filter(function (s) { return !gone[s.id] && (s.tape || 0) <= merges && s.blockers.every(function (b) { return gone[b]; }); });
-      var ok = free.filter(function (s) { return m.canPlace(s.type); });
+      if (m.missionDone()) { m.next(); continue; }
+      var ok = st.filter(function (s) { return !gone[s.id] && s.blockers.every(function (b) { return gone[b]; }) && m.canPlace(s.type); });
       if (!ok.length) return { win: false, junk: junk };
       var pick = null;
       if (style === 'smart') {
-        var best = -Infinity, room = m.room();
+        var best = -Infinity;
         ok.forEach(function (s) {
-          var c = m.count(s.type), want = !!m.wanted[s.type];
-          /* Like a tile-match player: finish pairs, then grow pairs, and open a new kind only with room to spare,
-             preferring kinds with more copies already uncovered. */
-          var vis = st.filter(function (x) { return !gone[x.id] && x.type === s.type && (x.tape || 0) <= merges && x.blockers.every(function (q) { return gone[q]; }); }).length;
-          /* vis counts this sticker too: a pair is worth growing only when its third is also in reach. */
-          var v = c === 2 ? 100 + (want ? 10 : 0)
-            : c === 1 ? (vis >= 2 ? 60 : 15) - (room <= 1 ? 80 : room <= 2 && vis < 2 ? 40 : 0)
-            : (vis >= 3 ? 50 : vis === 2 ? 20 : 4) + (want ? 3 : 0) - (room <= 2 && !(vis >= 3 && room >= 3) ? 60 : 0);
-          v += rng() * 4;
+          var covers = s.blocks.filter(function (q) { return !gone[q] && m.wanted[st[q].type]; }).length;
+          var v = m.wanted[s.type] ? 100 : 20 + covers * 15 - (m.room() <= 1 && !covers ? 30 : 0);
+          v += s.blocks.length + rng() * 4;
           if (v > best) { best = v; pick = s; }
         });
       } else pick = ok[Math.floor(rng() * ok.length)];
       gone[pick.id] = true;
-      var it = m.place({ type: pick.type });
-      if (!it.target) junk++;
-      it.landed = true;
-      m.ready().forEach(function (three) { m.clear(three); merges++; });
+      if (!m.place({ type: pick.type }).target) junk++;
     }
     return { win: true, junk: junk };
   }
   /* Runs the bots and loosens the box (one slot at a time) until a careful player wins at least 60% of the time.
-     Par is the junk a careful player peels: the median over the winning runs. */
-  function setup(level, targets, cap) {
+     Par is the stickers a careful player parks in the box: the median over the winning runs. */
+  function setup(level, missions, cap) {
     var r = null, mystery = level.stickers.filter(function (s) { return s.mystery; }).length;
     for (var c = cap; c <= MAX_CAP - 1; c++) {
       var smart = 0, random = 0, junks = [];
       for (var k = 0; k < 24; k++) {
-        var a = play(level, targets, c, 'smart', k + 1);
+        var a = play(level, missions, c, 'smart', k + 1);
         if (a.win) { smart++; junks.push(a.junk); }
-        if (play(level, targets, c, 'random', k + 1).win) random++;
+        if (play(level, missions, c, 'random', k + 1).win) random++;
       }
       junks.sort(function (x, y) { return x - y; });
       r = { cap: c, smart: smart / 24, random: random / 24, par: (junks.length ? junks[Math.floor(junks.length / 2)] : 0) + Math.floor(mystery / 3) };
@@ -174,8 +170,8 @@
     }
     return r;
   }
-  /* Stars from junk peeled against par: 3 at or under par, 2 within a margin that grows with par, else 1. */
+  /* Stars from stickers parked against par: 3 at or under par, 2 within a margin that grows with par, else 1. */
   function starsFor(junk, par) { return junk <= par ? 3 : junk <= par + Math.max(2, Math.ceil(par / 3)) ? 2 : 1; }
 
-  PO.Hunt = { MAX_CAP: MAX_CAP, PAGES: PAGES, build: build, Model: Model, play: play, setup: setup, starsFor: starsFor, dealer: dealer };
+  PO.Hunt = { MAX_CAP: MAX_CAP, PAGES: PAGES, build: build, albumOf: albumOf, Model: Model, play: play, setup: setup, starsFor: starsFor, dealer: dealer };
 })(typeof window !== 'undefined' ? window : globalThis);

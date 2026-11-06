@@ -44,7 +44,7 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { t.classList.remove('on'); }, 1800);
   }
-  /* Sticker ids are album * 10 + design, so one sheet holds the page's album and the junk album. */
+  /* Sticker ids are album * 10 + design; each mission collects one album. */
   function stickerSprite(id) { return Art.sprite(Math.floor(id / 10), id % 10); }
   function paintSticker(cv, id, size) { Art.paintInto(cv, Math.floor(id / 10), id % 10, { size: size }); }
   function hexOfType(id) { var a = Art.ALBUMS[Math.floor(id / 10)]; return a ? a.accent : '#FFD54A'; }
@@ -64,25 +64,27 @@
   function buzz(p) { if (navigator.vibrate && (!navigator.userActivation || navigator.userActivation.hasBeenActive)) { try { navigator.vibrate(p); } catch (e) { /* optional */ } } }
 
   /* ---------- the sticker book ----------
-     A level's stickers come in sheets of about three. The right page is the sheet being worked on; when it is full
-     it turns over to the left and the next sheet appears on the right. Slot positions are kept in book units
-     (0..1 of width and height) so any canvas can draw them. */
+     Each spread is one mission: its stickers are split over the left and right pages. When the mission is full
+     the book turns to the next mission's spread. Slot positions are kept in book units (0..1 of width and
+     height) so any canvas can draw them. */
   var lv = null, levelIdx = 0, artCv = $('art'), artX = artCv.getContext('2d');
   var dpr = 1, shine = -1, flights = [], winPending = null, chunkSound = 0;
-  /* slots: the right page (current sheet). leftSlots: the last finished sheet, or null for the opening page.
-     stored: page stickers merged before their sheet opened; they stick in as soon as it turns up. */
-  var sheets = [], sheetIdx = 0, slots = [], leftSlots = null, stored = {}, storedN = 0, flip = null;
+  /* left, right: the current mission's pages; slots: both. booked: stickers already in the book. */
+  var missionIdx = 0, left = [], right = [], slots = [], flip = null, booked = 0;
   var bookW = 300, bookH = 180, glowTypes = {};
   function rng(seed) { var s = seed >>> 0; return function () { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
   var PAGES_X = [{ x0: 0.07, x1: 0.47 }, { x0: 0.53, x1: 0.93 }], PAGE_Y0 = 0.2, PAGE_Y1 = 0.9;
-  /* Splits a level's stickers into sheets of about three, dealt round so the sizes stay even. */
-  function splitSheets(targets) {
-    var n = Math.max(1, Math.round(targets.length / 3)), out = [];
-    for (var i = 0; i < n; i++) out.push([]);
-    targets.forEach(function (t, k) { out[k % n].push(t); });
-    return out;
+  /* A mission's stickers laid out over a spread: the first half on the left page, the rest on the right. */
+  function spreadOf(types, seed) {
+    var h = Math.ceil(types.length / 2);
+    return { left: buildPage(types.slice(0, h), 0, seed), right: buildPage(types.slice(h), 1, seed) };
   }
-  /* Lays out one sheet's stickers on one page: side 0 is the left page, 1 the right. */
+  function openMission(k) {
+    var sp = spreadOf(lv.missions[k], lv.cfg.seed + k * 31);
+    left = sp.left; right = sp.right; slots = left.concat(right);
+  }
+  function missionName() { var a = Art.ALBUMS[H.albumOf(levelIdx, missionIdx)]; return a ? I18n.name(a) : ''; }
+  /* Lays out stickers on one page of the book: side 0 is the left page, 1 the right. */
   function buildPage(types, side, seed) {
     var r = rng(seed * 7 + 3 + side), pg = PAGES_X[side], m = types.length, out = [];
     var pw = (pg.x1 - pg.x0) * 5, ph = (PAGE_Y1 - PAGE_Y0) * 3;
@@ -108,7 +110,7 @@
   }
   /* Draws a spread into ctx at w x h. pages: { left, right } slot lists (left null: the opening page).
      opts: now, full (every slot filled), title (washi tape on the right page), cover (text on an opening page),
-     stored (count on a bookmark), glow, pick. */
+     glow, pick. */
   function drawBook(x, w, h, pages, opts) {
     var now = opts.now || 0;
     x.save();
@@ -148,14 +150,6 @@
       x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(opts.title, w * 0.11, h * 0.058);
       x.restore();
     }
-    /* A ribbon bookmark counts stickers already merged for sheets that have not turned up yet. */
-    if (opts.stored) {
-      var bx = w * 0.885, by = h * 0.04, bw = h * 0.1, bh = h * 0.2;
-      x.beginPath(); x.moveTo(bx, by); x.lineTo(bx + bw, by); x.lineTo(bx + bw, by + bh); x.lineTo(bx + bw / 2, by + bh * 0.78); x.lineTo(bx, by + bh); x.closePath();
-      x.fillStyle = '#E8453C'; x.fill();
-      x.fillStyle = '#FFF'; x.font = '800 ' + Math.round(h * 0.075) + 'px "Baloo 2",system-ui,sans-serif';
-      x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(String(opts.stored), bx + bw / 2, by + bh * 0.42);
-    }
     [pages.left || [], pages.right || []].forEach(function (list) {
       list.forEach(function (sl) {
         var cx = sl.u * w, cy = sl.v * h, size = sl.s * h, sp = stickerSprite(sl.type), box = size / Art.ART;
@@ -188,13 +182,13 @@
     });
     x.restore();
   }
-  function sheetTitle() { return 'Tờ ' + (sheetIdx + 1) + '/' + sheets.length; }
+  function missionTitle() { return 'Nhiệm vụ ' + (missionIdx + 1) + '/' + lv.missions.length; }
   function renderBook(now) {
     glowTypes = {};
     if (model && running) Game.freeStickers().forEach(function (s) { if (model.wanted[s.type]) glowTypes[s.type] = true; });
     artX.setTransform(dpr, 0, 0, dpr, 0, 0);
     artX.clearRect(0, 0, bookW, bookH);
-    drawBook(artX, bookW, bookH, { left: leftSlots, right: slots }, { now: now, title: sheetTitle(), cover: pageName(lv.def), stored: storedN, glow: glowTypes, pick: picking });
+    drawBook(artX, bookW, bookH, { left: flip ? flip.oldLeft : left, right: right }, { now: now, title: missionTitle(), glow: glowTypes, pick: picking });
     if (flip) drawFlip(now);
     if (shine >= 0) {
       var p = (now - shine) / 0.9;
@@ -206,23 +200,23 @@
       }
     }
   }
-  /* ---------- turning a finished sheet ----------
+  /* ---------- turning to the next mission ----------
      The full right page is photographed, then drawn narrowing toward the spine (its front) and widening over the
-     left page (its back, the same sheet laid out as a left page). Underneath, the next sheet is already waiting. */
+     left page (its back: the next mission's empty left page). Underneath, the next right page is already waiting. */
   var FLIP = 0.75;
-  function snapshot(pages) {
+  function snapshot(pages, full) {
     var c = document.createElement('canvas');
     c.width = Math.round(bookW * dpr); c.height = Math.round(bookH * dpr);
     var cx = c.getContext('2d'); cx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawBook(cx, bookW, bookH, pages, { full: true });
+    drawBook(cx, bookW, bookH, pages, { full: full });
     return c;
   }
   function startFlip(now) {
-    var seed = lv.cfg.seed + sheetIdx * 31, done = buildPage(sheets[sheetIdx], 0, seed);
-    done.forEach(function (sl) { sl.filledAt = 0; });
-    flip = { t0: now, front: snapshot({ left: leftSlots, right: slots }), back: snapshot({ left: done, right: null }), nextLeft: done, oldLeft: leftSlots };
-    sheetIdx++;
-    slots = buildPage(sheets[sheetIdx], 1, lv.cfg.seed + sheetIdx * 31);
+    var front = snapshot({ left: left, right: right }, true), oldLeft = left;
+    missionIdx++;
+    openMission(missionIdx);
+    flip = { t0: now, front: front, back: snapshot({ left: left, right: null }, false), oldLeft: oldLeft };
+    $('lvName').textContent = missionName();
     Snd.wind(0.6);
     if (reduced) endFlip(now);
   }
@@ -242,28 +236,27 @@
     }
     artX.restore();
   }
-  /* The turned sheet settles on the left; stickers merged early for the new sheet stick in one by one. */
-  function endFlip(now) {
-    leftSlots = flip.nextLeft;
+  /* The new mission is open: stickers waiting in the box that it wants fly up into their slots. */
+  function endFlip() {
     flip = null;
-    var k = 0;
-    slots.forEach(function (sl) {
-      if (!stored[sl.type]) return;
-      delete stored[sl.type]; storedN--;
-      sl.reserved = true; sl.filledAt = now + 0.15 + k * 0.18;
-      setTimeout(function () { Snd.stick(); buzz(14); }, (0.15 + k * 0.18) * 1000);
-      k++;
-    });
+    model.next().forEach(flyFromBox);
+  }
+  /* A box sticker the model just handed to the open mission leaves its slot and flies up into the book. */
+  function flyFromBox(it) {
+    var p = toScreen(boxPos(it.slot));
+    delete items[it.id];
+    launchBook(it.type, p.x, p.y);
+    booked++;
   }
   function slotScreen(sl) { var r = artCv.getBoundingClientRect(); return { x: r.left + sl.u * bookW, y: r.top + sl.v * bookH }; }
-  function bookPct() { return lv && lv.targets.length ? Math.round((lv.targets.length - model.left) / lv.targets.length * 100) : 0; }
-  function sheetDone(now) { return slots.length && slots.every(function (s) { return s.filledAt >= 0 && now >= s.filledAt + 0.4; }); }
-  function bookDone(now) { return sheetIdx === sheets.length - 1 && !flip && sheetDone(now); }
-  /* A merged page sticker flies to its slot on the current sheet, or to the bookmark if its sheet comes later. */
+  function bookPct() { return lv && lv.targets.length ? Math.round(booked / lv.targets.length * 100) : 0; }
+  function missionFull(now) { return slots.length && slots.every(function (s) { return s.filledAt >= 0 && now >= s.filledAt + 0.4; }); }
+  function bookDone(now) { return model.last() && !flip && missionFull(now); }
+  /* A sticker the mission wants flies to its slot in the open spread. */
   function launchBook(type, sx, sy) {
     var sl = null;
     for (var i = 0; i < slots.length; i++) if (slots[i].type === type && slots[i].filledAt < 0 && !slots[i].reserved) { sl = slots[i]; break; }
-    if (!sl) sl = { type: type, u: 0.91, v: 0.12, s: 0.08, rot: 0, store: true };
+    if (!sl) return;
     sl.reserved = true;
     var to = slotScreen(sl);
     flights.push({ slot: sl, x0: sx, y0: sy, x1: to.x, y1: to.y, t: 0, spin: 0, trail: 0, design: type, hex: hexOfType(type), side: sx < to.x ? 1 : -1 });
@@ -272,8 +265,7 @@
   /* The slap: the sticker lands in its slot with a ring, a few sparkles and a satisfying stick sound. */
   function stickInto(f) {
     var sl = f.slot, to = slotScreen(sl);
-    if (sl.store) { stored[sl.type] = true; storedN++; }
-    else sl.filledAt = performance.now() / 1000;
+    sl.filledAt = performance.now() / 1000;
     rings.push({ x: to.x, y: to.y, t: 0, dur: 0.36, r0: 8, r1: 46, hex: f.hex, w: 5 });
     for (var k = 0; k < 12; k++) {
       var b = Math.random() * TAU, s2 = 70 + Math.random() * 120;
@@ -283,7 +275,6 @@
     Snd.star(Math.min(4, chunkSound++ % 5));
     buzz(18);
   }
-  function pageName(def) { return Art.ALBUMS[def.album] ? I18n.name(Art.ALBUMS[def.album]) : ''; }
 
   /* ---------- flights: a target pops off the sheet, arcs over and lands in the book ---------- */
   var flyCv = $('fly'), flyX = flyCv.getContext('2d');
@@ -342,13 +333,14 @@
       if (p >= 1) { flights.splice(i, 1); stickInto(f); }
     }
   }
-  function busy() { return flights.length > 0 || takes.length > 0 || clearing.length > 0; }
+  function busy() { return flights.length > 0 || takes.length > 0; }
 
   /* ---------- the box ----------
-     One felt strip of slots under the book. Every peeled sticker lands in it; three of a kind squeeze together. */
-  var model = null, items = {}, takes = [], clearing = [], junkPeeled = 0, par = 0, stuck = 0;
-  /* Combo: page stickers sent to the book in a row; junk that just sits in the box breaks it. No timer. */
-  var combo = 0, comboPops = [], comboBreak = null, praised = {}, lastPraise = -9, lastClear = -9;
+     One felt strip of slots under the book. A peeled sticker the mission does not want waits here until a later
+     mission wants it. */
+  var model = null, items = {}, takes = [], junkPeeled = 0, par = 0, stuck = 0;
+  /* Combo: stickers sent straight to the book in a row; one parked in the box breaks it. No timer. */
+  var combo = 0, comboPops = [], comboBreak = null, praised = {}, lastPraise = -9;
   var slotAnim = null, boostBtns = {}, lastAct = 0;
   var picking = false, magFx = null;
   var MAX_ADDED = 2, slotsAdded = 0, baseCap = 5;
@@ -387,58 +379,43 @@
     items[d.id] = it;
     lastAct = performance.now() / 1000;
     if (picking) setPicking(false);
-    if (it.target) return;
+    if (it.target) { booked++; return; }
     junkPeeled++;
     $('hudStars').innerHTML = stars(starsNow());
-    /* Junk that does not finish a triple just sits in the box: it breaks the run of page stickers. */
-    if (model.count(it.type) < 3) {
-      if (combo >= 2) { var bp = toScreen(boxPos(it.slot)); comboBreak = { n: combo, t0: performance.now() / 1000, x: bp.x, y: bp.y - 18 }; }
-      combo = 0; praised = {};
-    }
+    /* A sticker parked in the box breaks the run of stickers sent straight to the book. */
+    if (combo >= 2) { var bp = toScreen(boxPos(it.slot)); comboBreak = { n: combo, t0: performance.now() / 1000, x: bp.x, y: bp.y - 18 }; }
+    combo = 0; praised = {};
   }
   function onTake(d) {
     var it = items[d.id];
     if (!it) return;
+    var br = $('board').getBoundingClientRect();
+    if (it.target) {
+      /* The mission wants it: straight up into its slot in the book. */
+      delete items[d.id];
+      var sx = br.left + d.x, sy = br.top + d.y;
+      launchBook(it.type, sx, sy);
+      combo++;
+      comboPops.push({ n: combo, t0: performance.now() / 1000, x: sx, y: sy });
+      Snd.clear(combo);
+      praiseCombo();
+      return;
+    }
     it.magnet = d.magnet || 0;
-    takes.push({ it: it, x0: d.x, y0: d.y, size0: d.size * Art.ART, r0: d.r, t: 0, board: $('board').getBoundingClientRect(), spiral: d.magnet ? (d.id % 5) + 1 : 0 });
+    takes.push({ it: it, x0: d.x, y0: d.y, size0: d.size * Art.ART, r0: d.r, t: 0, board: br, spiral: d.magnet ? (d.id % 5) + 1 : 0 });
   }
-  function canTake(type) { return !!model && model.canPlace(type); }
+  /* From the moment a mission is full until the next one is open, nothing is peeled: a sticker taken then would
+     go to the box even when the next mission wants it, which looks like a bug. Game.js waits without an alarm. */
+  function turning() { return !!flip || (model.missionDone() && !model.last()); }
+  function canTake(type) { return !model ? false : turning() ? 'wait' : model.canPlace(type); }
   function land(it) { it.landed = true; it.pop = 1; Snd.stick(); if (it.magnet) Snd.clack(2); }
   function updateBox(dt) {
-    Object.keys(items).forEach(function (id) { var it = items[id]; if (it.pop > 0) it.pop = Math.max(0, it.pop - dt * 4); });
-    /* Three of a kind squeeze together, then vanish in a puff. */
-    model.ready().forEach(function (three) { three.forEach(function (it) { it.clearing = true; }); clearing.push({ three: three, t: 0, before: model.used() }); });
-    for (var i = clearing.length - 1; i >= 0; i--) {
-      var cl = clearing[i];
-      cl.t += dt / (reduced ? 0.05 : 0.25);
-      if (cl.t < 1) continue;
-      clearing.splice(i, 1);
-      var mid = toScreen(boxPos(cl.three[1].slot)), hex = hexOfType(cl.three[0].type);
-      cl.three.forEach(function (it) { delete items[it.id]; });
-      var forBook = model.clear(cl.three);
-      if (forBook) {
-        /* The page wanted this one: the three merge into one sticker that flies up into its slot. */
-        launchBook(cl.three[0].type, mid.x, mid.y);
-        combo++;
-        comboPops.push({ n: combo, t0: performance.now() / 1000, x: mid.x, y: mid.y });
-        Snd.clear(combo);
-        praiseCombo();
-      } else {
-        /* Junk: a puff and it is gone. */
-        rings.push({ x: mid.x, y: mid.y, t: 0, dur: 0.34, r0: 10, r1: 60, hex: hex, w: 6 });
-        for (var k = 0; k < 14; k++) {
-          var b = Math.random() * TAU, s2 = 90 + Math.random() * 150;
-          sparks.push({ x: mid.x, y: mid.y, vx: Math.cos(b) * s2, vy: Math.sin(b) * s2, life: 0.4, max: 0.4, hex: k % 3 ? hex : '#FFFFFF', size: 3 + Math.random() * 3 });
-        }
-        Snd.snapBack();
-      }
-      buzz(20);
-      Game.merge();
-      var now = performance.now() / 1000;
-      if (cl.before >= model.cap - 1) praise('Giải cứu!');
-      else if (now - lastClear < 0.6) praise('Liên hoàn!');
-      lastClear = now;
-    }
+    Object.keys(items).forEach(function (id) {
+      var it = items[id];
+      if (it.pop > 0) it.pop = Math.max(0, it.pop - dt * 4);
+      /* Whenever the open page has an empty slot for a sticker resting in the box, it flies up at once. */
+      if (it.landed && !turning() && model.claim(it)) flyFromBox(it);
+    });
   }
   /* Praise for a run of targets; special moments (rescues, chains) are praised where they happen. */
   var MILESTONES = [[2, 'Tốt lắm!'], [3, 'Tuyệt vời!'], [4, 'Xuất sắc!'], [5, 'Siêu đỉnh!'], [7, 'Không thể tin nổi!']];
@@ -458,7 +435,7 @@
     buzz([12, 40, 18]);
     setTimeout(function () { p.remove(); }, reduced ? 700 : 1200);
   }
-  /* The run count pops up over the box where a page triple merged; when junk breaks it, the old count drops from the box. */
+  /* The run count pops up where a sticker left the sheet for the book; when one is parked, the old count drops from the box. */
   function drawCombo() {
     var ts = performance.now() / 1000;
     comboPops = comboPops.filter(function (cp) { return cp.n >= 2 && ts - cp.t0 < 1.1; });
@@ -512,14 +489,12 @@
       boxX.strokeStyle = relief ? '#2E9E5B' : sewing ? '#E0A100' : full && running ? 'rgba(240,58,70,' + (0.5 + 0.4 * Math.sin(now * 7)) + ')' : '#BFA77E';
       boxX.stroke(); boxX.setLineDash([]);
     }
-    /* Junk in the box; a clearing triple slides together toward its middle sticker. */
+    /* Stickers waiting for a later mission. */
     Object.keys(items).forEach(function (id) {
       var it = items[id];
       if (!it.landed) return;
-      var to = boxPos(it.slot), x = to.x;
-      var cl = it.clearing && clearing.filter(function (c) { return c.three.indexOf(it) >= 0; })[0];
-      if (cl) { var mid = boxPos(cl.three[1].slot), ce = ease(Math.min(1, cl.t)); x += (mid.x - x) * ce; }
-      drawFace(boxX, it.type, x, to.y, wd2 * 0.86, 1, 1 + it.pop * 0.16 + (cl ? Math.sin(Math.min(1, cl.t) * Math.PI) * 0.15 : 0));
+      var to = boxPos(it.slot);
+      drawFace(boxX, it.type, to.x, to.y, wd2 * 0.86, 1, 1 + it.pop * 0.16);
     });
   }
   function renderTakes(dt) {
@@ -537,9 +512,9 @@
       if (p >= 1) { takes.splice(i, 1); land(it); }
     }
   }
-  /* Lost: nothing is moving, and no peelable sticker fits the box (or every sticker left is taped or covered). */
+  /* Lost: nothing is moving, the box is full and no peelable sticker is one the mission wants. */
   function checkStuck(dt) {
-    if (!running || busy() || Game.busy() || model.done()) { stuck = 0; return; }
+    if (!running || busy() || Game.busy() || flip || model.missionDone()) { stuck = 0; return; }
     if (Object.keys(items).some(function (id) { return !items[id].landed; })) { stuck = 0; return; }
     var free = Game.freeStickers();
     if (free.some(function (s) { return model.canPlace(s.type); })) { stuck = 0; return; }
@@ -547,11 +522,7 @@
     if (stuck > 0.5) onLose();
   }
   function starsNow() { return continued ? 1 : H.starsFor(junkPeeled, par); }
-  function rank(s) {
-    var c = model.count(s.type), want = model.wanted[s.type] ? 1 : 0;
-    if (c === 2) return 10 + want;
-    return model.free() >= 0 ? 2 + c * 3 + want : 0;
-  }
+  function rank(s) { return model.wanted[s.type] ? 10 : model.free() >= 0 ? 1 : 0; }
 
   /* ---------- helpers (boosters) ---------- */
   var boosts = {};
@@ -605,17 +576,16 @@
       /* The player picks an empty slot in the book; its sticker is pulled out from wherever it lies. */
       if (!picking && !slots.some(function (sl) { return magnetTarget(sl); })) return false;
       setPicking(!picking);
-      if (picking) toast('Chạm vào ô trống trên trang sổ: nam châm hút đủ bộ ba sticker đó.');
+      if (picking) toast('Chạm vào ô trống trên trang sổ: nam châm hút đúng sticker đó.');
       return 'pick';
     }
     return false;
   }
-  /* The stickers the magnet would pull to finish this slot's triple, or null if the box has no room for them. */
+  /* The sticker the magnet would pull for this empty slot, wherever it lies on the sheet. */
   function magnetTarget(sl) {
-    if (sl.filledAt >= 0 || sl.reserved) return null;
-    var need = 3 - model.count(sl.type), pool = Game.freeStickers(true).filter(function (x) { return x.type === sl.type; });
-    if (need <= 0 || pool.length < need || model.room() < need - 1) return null;
-    return pool.slice(0, need).map(function (x) { return x.id; });
+    if (sl.filledAt >= 0 || sl.reserved || turning()) return null;
+    var pool = Game.freeStickers(true).filter(function (x) { return x.type === sl.type; });
+    return pool.length ? [pool[0].id] : null;
   }
   function setPicking(on) {
     picking = on;
@@ -631,7 +601,7 @@
     });
     if (!hit) return;
     var ids = magnetTarget(hit);
-    if (!ids) { Snd.thud(); toast(hit.reserved || model.count(hit.type) >= 3 ? 'Ô này sắp được dán rồi.' : 'Hộp không đủ chỗ cho bộ ba này.'); return; }
+    if (!ids) { Snd.thud(); toast('Ô này sắp được dán rồi.'); return; }
     setPicking(false);
     var b = boostBtns.magnet.getBoundingClientRect(), br = $('board').getBoundingClientRect(), to = slotScreen(hit);
     boosts.magnet--; renderBoosters();
@@ -691,12 +661,12 @@
       var goal = el('div', 'goal'), gc = el('canvas'), gw = 90, gh = 54, rr = Math.min(root.devicePixelRatio || 1, 2);
       gc.width = gw * rr; gc.height = gh * rr; gc.style.width = gw + 'px'; gc.style.height = gh + 'px';
       var gx = gc.getContext('2d'); gx.setTransform(rr, 0, 0, rr, 0, 0);
-      drawBook(gx, gw, gh, { left: leftSlots, right: slots }, { full: true, cover: pageName(lv.def) });
+      drawBook(gx, gw, gh, { left: left, right: right }, { full: true });
       goal.appendChild(gc);
-      var gp = el('p'); gp.innerHTML = '<b>Mục tiêu</b>Gom đủ sticker mà trang sổ yêu cầu và dán kín trang.';
+      var gp = el('p'); gp.innerHTML = '<b>Mục tiêu</b>Mỗi trang đôi là một nhiệm vụ sưu tầm: dán kín nó để lật sang nhiệm vụ mới.';
       goal.appendChild(gp);
       card.appendChild(goal);
-      var want = lv.targets[0], junk = lv.junk[0];
+      var want = lv.missions[0][0], later = lv.missions[1][0];
       function icon(id, size) { var c = el('canvas'); paintSticker(c, id, size); return c; }
       var ol = el('ol');
       function step(n, pic, html) {
@@ -705,14 +675,14 @@
         li.appendChild(num); li.appendChild(pic); li.appendChild(t); ol.appendChild(li);
       }
       var p1 = el('span', 'pic big'); p1.appendChild(icon(want, 44));
-      step(1, p1, '<b>Chạm</b> vào sticker để bóc. Sticker bóc ra vào <b>hộp</b> bên dưới sổ.');
-      var p2 = el('span', 'pic wait'); p2.appendChild(icon(want, 22)); p2.appendChild(icon(want, 22)); p2.appendChild(icon(want, 22));
-      step(2, p2, 'Đủ <b>3 cái giống nhau</b>: nếu <b>trang sổ cần</b> thì gộp lại <b>bay vào sổ</b>.');
-      var p3 = el('span', 'pic wait'); p3.appendChild(icon(junk, 22)); p3.appendChild(icon(junk, 22)); p3.appendChild(el('i'));
-      step(3, p3, 'Sticker trang không cần là <b>đồ thừa</b>: đủ 3 cái thì tự dọn. Hộp có hạn, <b>đừng để đầy</b>!');
+      step(1, p1, '<b>Chạm</b> vào sticker để bóc. Đúng sticker <b>nhiệm vụ cần</b> thì nó <b>bay thẳng lên sổ</b>.');
+      var p2 = el('span', 'pic wait'); p2.appendChild(icon(later, 22)); p2.appendChild(el('i')); p2.appendChild(el('i'));
+      step(2, p2, 'Sticker chưa cần thì vào <b>hộp chứa</b> chờ. Lật sang nhiệm vụ cần nó, nó tự <b>bay lên sổ</b>.');
+      var p3 = el('span', 'pic wait'); p3.appendChild(icon(later, 22)); p3.appendChild(icon(later, 22)); p3.appendChild(icon(later, 22));
+      step(3, p3, 'Hộp có hạn, <b>đừng để đầy</b>: bóc sticker đè lên thứ nhiệm vụ đang cần.');
       card.appendChild(ol);
       var rule = el('p', 'rule');
-      rule.innerHTML = '<b>Thắng:</b> dán kín trang sổ.<br><b>Thua:</b> hộp đầy và không bóc được gì nữa.';
+      rule.innerHTML = '<b>Thắng:</b> xong mọi nhiệm vụ của trang.<br><b>Thua:</b> hộp đầy và không còn sticker nhiệm vụ cần để bóc.';
       card.appendChild(rule);
       var a = el('div', 'acts');
       a.appendChild(btn('Chơi thôi!', 'primary big wide', function () {
@@ -726,8 +696,7 @@
   }
   $('helpBtn').addEventListener('click', function () { Snd.click(); if (lv && running) showHowTo(); });
   var MECHS = {
-    tape: { title: 'Băng dính', html: 'Sticker bị <b>dán băng dính</b> chưa bóc được. Số trên băng giảm 1 mỗi lần bạn <b>ghép xong một bộ ba</b> trong hộp. Về 0 thì băng tự bung ra.' },
-    mystery: { title: 'Sticker úp', html: 'Sticker <b>úp mặt</b> chỉ lộ hình khi không còn sticker nào đè lên nó. Có thể là sticker trang sổ cần, cũng có thể là đồ thừa.' }
+    mystery: { title: 'Sticker úp', html: 'Sticker <b>úp mặt</b> chỉ lộ hình khi không còn sticker nào đè lên nó. Có thể là sticker nhiệm vụ đang cần, cũng có thể là của nhiệm vụ sau.' }
   };
   function showMechanics(list) {
     if (!list.length) return;
@@ -739,7 +708,7 @@
       var pic = el('span', 'mech-pic ' + kind), c = el('canvas');
       paintSticker(c, lv.targets[0], 72);
       pic.appendChild(c);
-      pic.appendChild(el('i', '', kind === 'tape' ? '2' : '?'));
+      pic.appendChild(el('i', '', '?'));
       card.appendChild(pic);
       var p = el('p'); p.innerHTML = m.html; card.appendChild(p);
       var a = el('div', 'acts');
@@ -757,11 +726,11 @@
   function startLevel(i) {
     levelIdx = i;
     lv = H.build(i);
-    var level = PO.Core.buildLevel(lv.cfg), tuned = H.setup(level, lv.targets, lv.def.cap);
+    var level = PO.Core.buildLevel(lv.cfg), tuned = H.setup(level, lv.missions, lv.def.cap);
     baseCap = tuned.cap;
-    model = new H.Model(lv.targets, tuned.cap);
-    items = {}; takes = []; clearing = []; junkPeeled = 0; par = tuned.par; stuck = 0; running = true;
-    combo = 0; comboPops = []; comboBreak = null; praised = {}; lastPraise = -9; lastClear = -9; slotAnim = null;
+    model = new H.Model(lv.missions, tuned.cap);
+    items = {}; takes = []; junkPeeled = 0; par = tuned.par; stuck = 0; running = true;
+    combo = 0; comboPops = []; comboBreak = null; praised = {}; lastPraise = -9; slotAnim = null;
     lastAct = performance.now() / 1000; picking = false; magFx = null; artCv.style.cursor = ''; slotsAdded = 0;
     flights = []; sparks = []; rings = []; winPending = null; shine = -1; chunkSound = 0; continued = false;
     /* Test build: plenty of every helper. */
@@ -771,9 +740,9 @@
     $('lvNum').textContent = 'Trang ' + (i + 1) + (lv.def.hard ? ' · KHÓ' : '');
     $('play').classList.toggle('hard', !!lv.def.hard);
     if (lv.def.hard) hardSplash();
-    $('lvName').textContent = pageName(lv.def);
-    sheets = splitSheets(lv.targets); sheetIdx = 0; leftSlots = null; stored = {}; storedN = 0; flip = null;
-    slots = buildPage(sheets[0], 1, lv.cfg.seed);
+    missionIdx = 0; flip = null; booked = 0;
+    openMission(0);
+    $('lvName').textContent = missionName();
     sizeBook(); sizeFly(); sizeBox();
     $('hudStars').innerHTML = stars(3);
     renderBoosters();
@@ -782,14 +751,14 @@
     Game.configure({ tapPeel: true, haptics: true, idleHint: i < 2 });
     Game.start(lv.cfg, {
       hud: function () {},
-      toast: function (m) { toast(m.key === 'beltFull' ? 'Hộp đầy rồi! Chỉ bóc được cái thứ ba của một cặp trong hộp.' : I18n.t(m.key, m)); },
+      toast: function (m) { toast(m.key === 'beltFull' ? 'Hộp đầy rồi! Chỉ bóc được sticker nhiệm vụ đang cần.' : I18n.t(m.key, m)); },
       peel: onPeel,
       take: onTake,
       canTake: canTake,
       rank: rank
     });
     if (i === 0 && !save.howto) showHowTo();
-    else showMechanics(['tape', 'mystery'].filter(function (k) { return lv.def.mods[k] && !(save.seen && save.seen[k]); }));
+    else showMechanics(['mystery'].filter(function (k) { return lv.def.mods[k] && !(save.seen && save.seen[k]); }));
   }
   function onLose() {
     running = false;
@@ -824,15 +793,15 @@
       modal(function (card, close) {
         var s = el('div', 'big-stars'); s.innerHTML = stars(starsWon); card.appendChild(s);
         if (starsWon === 3 && junkPeeled < par) card.appendChild(el('div', 'perfect', 'Hoàn hảo!'));
-        card.appendChild(el('h2', '', last ? 'Đầy cả cuốn sổ!' : 'Trang sổ đã đầy!'));
+        card.appendChild(el('h2', '', last ? 'Đầy cả cuốn sổ!' : 'Xong mọi nhiệm vụ!'));
         var c = el('canvas', 'page-shot'), cw2 = 280, ch2 = 168, rr = Math.min(root.devicePixelRatio || 1, 2);
         c.width = cw2 * rr; c.height = ch2 * rr; c.style.width = cw2 + 'px'; c.style.height = ch2 + 'px';
         var cx2 = c.getContext('2d'); cx2.setTransform(rr, 0, 0, rr, 0, 0);
-        drawBook(cx2, cw2, ch2, { left: leftSlots, right: slots }, { full: true, title: sheetTitle(), cover: pageName(lv.def) });
+        drawBook(cx2, cw2, ch2, { left: left, right: right }, { full: true, title: missionTitle() });
         card.appendChild(c);
         setTimeout(function () { c.classList.add('developed'); Snd.star(4); }, reduced ? 0 : 350);
-        var sc = el('p', 'score'); sc.innerHTML = 'Bóc thừa <b>' + junkPeeled + '</b> · Chuẩn <b>' + par + '</b>'; card.appendChild(sc);
-        card.appendChild(el('p', '', continued ? 'Hoàn thành nhờ thêm ô. Chơi lại không thêm ô để có thêm sao.' : starsWon === 3 ? 'Đào gọn gàng. Tuyệt vời!' : 'Bóc thừa là bóc sticker không có trên trang. Bóc thừa tối đa ' + par + ' cái để được 3 sao.'));
+        var sc = el('p', 'score'); sc.innerHTML = 'Để vào hộp <b>' + junkPeeled + '</b> · Chuẩn <b>' + par + '</b>'; card.appendChild(sc);
+        card.appendChild(el('p', '', continued ? 'Hoàn thành nhờ thêm ô. Chơi lại không thêm ô để có thêm sao.' : starsWon === 3 ? 'Sưu tầm gọn gàng. Tuyệt vời!' : 'Để vào hộp là bóc sticker nhiệm vụ chưa cần. Để vào hộp tối đa ' + par + ' cái để được 3 sao.'));
         var a = el('div', 'acts');
         if (!last) a.appendChild(btn('Trang tiếp theo', 'primary big wide', function () { close(); startLevel(levelIdx + 1); }));
         a.appendChild(btn('Chơi lại', 'wide', function () { close(); startLevel(levelIdx); }));
@@ -868,14 +837,14 @@
   /* ---------- home: the book's pages ---------- */
   function showHome() {
     Game.stop();
-    lv = null; flights = []; sparks = []; rings = []; model = null; items = {}; takes = []; clearing = []; running = false;
+    lv = null; flights = []; sparks = []; rings = []; model = null; items = {}; takes = []; flip = null; running = false;
     $('play').hidden = true;
     var box = $('home');
     box.hidden = false;
     box.innerHTML = '';
     var logo = el('div', 'logo');
     logo.appendChild(el('h1', '', 'Sổ Sticker'));
-    logo.appendChild(el('p', '', 'Bóc sticker, gom đủ bộ ba những sticker trang sổ cần để dán vào sổ. Đồ thừa đủ ba cái là dọn!'));
+    logo.appendChild(el('p', '', 'Mỗi trang đôi là một nhiệm vụ sưu tầm. Bóc đúng sticker nhiệm vụ cần, nó bay ngay lên sổ!'));
     box.appendChild(logo);
     box.appendChild(el('div', 'grow'));
     var gal = el('div', 'gallery'), next = Math.min(save.unlocked, H.PAGES.length) - 1;
@@ -888,7 +857,7 @@
       c.width = bw * rr; c.height = bh * rr;
       var cx = c.getContext('2d'); cx.setTransform(rr, 0, 0, rr, 0, 0);
       var pb = H.build(i);
-      drawBook(cx, bw, bh, { left: null, right: buildPage(splitSheets(pb.targets)[0], 1, pb.cfg.seed) }, { full: save.stars[i] > 0, cover: pageName(def) });
+      drawBook(cx, bw, bh, spreadOf(pb.missions[0], pb.cfg.seed), { full: save.stars[i] > 0 });
       t.appendChild(c);
       t.appendChild(el('b', '', 'Trang ' + (i + 1)));
       var s = el('span', 'stars'); s.innerHTML = save.stars[i] ? stars(save.stars[i]) : ''; t.appendChild(s);
@@ -915,8 +884,8 @@
       if (model) { renderTakes(dt); renderMagnet(); drawCombo(); checkStuck(dt); hintBoost(now); }
       $('pct').textContent = bookPct() + '%';
       if (running && model && model.done() && !winPending) winPending = { stars: starsNow() };
-      /* A full sheet turns over once its stickers have landed; the level is won when the last sheet is full. */
-      if (!flip && !flights.length && sheetIdx < sheets.length - 1 && sheetDone(now)) startFlip(now);
+      /* A full mission turns the page once its stickers have landed; the level is won when the last one is full. */
+      if (model && !flip && !flights.length && !takes.length && model.missionDone() && !model.last() && missionFull(now)) startFlip(now);
       if (winPending && !flights.length && bookDone(now)) celebrate(winPending);
     }
     requestAnimationFrame(frame);

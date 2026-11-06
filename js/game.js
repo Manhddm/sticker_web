@@ -144,10 +144,10 @@
   }
   function canAdd(st) {
     if (beltMode()) {
-      if (!cb.canTake || cb.canTake(st ? st.type : null)) return true;
-      Snd.deny();
-      emit('toast', { key: 'beltFull' });
-      emit('beltFull');
+      var ok = !cb.canTake || cb.canTake(st ? st.type : null);
+      if (ok === true) return true;
+      /* 'wait': the page is busy for a moment, so the sticker just stays put, with no "full" alarm. */
+      if (ok !== 'wait') { Snd.deny(); emit('toast', { key: 'beltFull' }); emit('beltFull'); }
       return false;
     }
     if (logicalTray() < cap) return true;
