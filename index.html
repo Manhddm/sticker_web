@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!--BUILD:STRIP-START-->
+<!--BUILD:STRIP-END-->
+<title>Sổ Sticker</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Be+Vietnam+Pro:wght@500;700&display=swap">
+<style>
+/* Layout (mobile only, a phone-shaped column on desktop): the pixel picture on top, the tray right under it, the sticker sheet filling the rest, helpers at the bottom. One look in all themes. */
+:root {
+  color-scheme: light;
+  --mat: #2B5F8A;
+  --mat-deep: #1C4466;
+  --mat-line: rgba(255, 255, 255, 0.09);
+  --paper: #FBFAF6;
+  --paper-2: #EFEDE5;
+  --ink: #2A2438;
+  --ink-soft: #666074;
+  --on-mat: #FFFFFF;
+  --accent: #FF5A6E;
+  --gold: #FFC62E;
+  --good: #2E9E5B;
+  --font-display: 'Baloo 2', 'Be Vietnam Pro', system-ui, sans-serif;
+  --font-body: 'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0; overflow: hidden; color: var(--ink); font-family: var(--font-body); font-size: 15px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0;
+  background-color: var(--mat);
+  background-image:
+    linear-gradient(var(--mat-line) 1px, transparent 1px), linear-gradient(90deg, var(--mat-line) 1px, transparent 1px),
+    linear-gradient(rgba(255,255,255,.14) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.14) 1px, transparent 1px);
+  background-size: 24px 24px, 24px 24px, 120px 120px, 120px 120px;
+  -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none;
+}
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, canvas:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+#app { height: 100%; max-width: 430px; margin: 0 auto; position: relative; }
+.screen { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 6px; padding-block: 8px; min-height: 0; }
+.grow { flex: 1; min-height: 0; }
+
+.btn {
+  font-family: var(--font-display); font-weight: 800; font-size: 15px; line-height: 1.1; min-height: 46px; padding: 9px 16px;
+  border-radius: 16px; border: 3px solid #FFF; background: var(--paper-2); color: var(--ink);
+  box-shadow: 0 0 0 1px rgba(42,36,56,.28), 0 4px 0 rgba(20,16,32,.28);
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px; transition: transform .08s, box-shadow .08s;
+}
+.btn:active { transform: translateY(3px); box-shadow: 0 0 0 1px rgba(42,36,56,.28), 0 1px 0 rgba(20,16,32,.28); }
+.btn.primary { background: var(--gold); }
+.btn.big { font-size: 18px; min-height: 54px; border-radius: 20px; }
+.btn.wide { width: 100%; }
+.btn.sq { width: 44px; min-height: 44px; padding: 0; flex: none; }
+.ico { width: 22px; height: 22px; flex: none; }
+
+/* Home */
+.logo { text-align: center; padding-top: 6px; }
+.logo h1 { margin: 0; font-family: var(--font-display); font-weight: 800; font-size: 44px; line-height: 1; color: var(--accent); paint-order: stroke fill; -webkit-text-stroke: 9px #FFF; filter: drop-shadow(0 3px 0 rgba(20,16,32,.3)); }
+.logo p { margin: 6px auto 0; color: var(--on-mat); font-weight: 700; font-size: 14px; line-height: 1.4; max-width: 32ch; text-wrap: balance; }
+.gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; flex: none; padding: 8px 6px 4px; }
+/* The picture list scrolls; the play button stays pinned at the bottom. */
+#home { overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.4) transparent; }
+#home .logo { flex: none; }
+#home .grow { flex: 0 0 4px; }
+#home > .btn.big { position: sticky; bottom: 0; flex: none; z-index: 2; box-shadow: 0 0 0 1px rgba(42,36,56,.28), 0 4px 0 rgba(20,16,32,.28), 0 -10px 18px rgba(20,40,70,.45); }
+.tile {
+  border: 0; border-radius: 16px; background: var(--paper); padding: 8px 8px 6px; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  box-shadow: 0 4px 0 rgba(20,16,32,.28); min-width: 0;
+}
+.tile canvas { width: 100%; aspect-ratio: 1; display: block; border-radius: 8px; image-rendering: pixelated; }
+.tile b { font-family: var(--font-display); font-size: 14px; line-height: 1.1; }
+.tile .stars { display: flex; min-height: 14px; }
+.tile.now { outline: 4px solid var(--gold); }
+.tile:disabled { opacity: .55; cursor: default; }
+.star { width: 14px; height: 14px; }
+
+/* Play */
+.hud { display: flex; align-items: center; gap: 8px; color: var(--on-mat); }
+.hud .mid { flex: 1; min-width: 0; line-height: 1.15; }
+.hud .mid b { display: block; font-family: var(--font-display); font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hud .mid span { display: block; font-size: 12px; font-weight: 700; opacity: .9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pct { flex: none; min-width: 58px; text-align: center; padding: 4px 10px; border-radius: 12px; background: var(--paper); color: var(--ink); font-family: var(--font-display); font-weight: 800; font-size: 18px; box-shadow: 0 2px 0 rgba(20,16,32,.25); font-variant-numeric: tabular-nums; }
+.hud-stars { display: flex; background: var(--paper); border-radius: 12px; padding: 5px 6px; box-shadow: 0 2px 0 rgba(20,16,32,.25); }
+.hud-stars .star { width: 18px; height: 18px; }
+.art-card { flex: none; align-self: center; background: var(--paper); border-radius: 16px; padding: 6px; box-shadow: 0 4px 0 rgba(20,16,32,.28); position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.art-card canvas { display: block; }
+#trays { display: block; width: 100%; flex: none; }
+.stage { position: relative; flex: 1; min-height: 0; }
+#board { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.btn.help { font-size: 20px; }
+/* First-time popup for a special sticker: the sticker drawn with its tape or face-down. */
+.mech-pic { position: relative; align-self: center; width: 72px; height: 72px; margin: 4px 0; }
+.mech-pic canvas { display: block; width: 72px; height: 72px; }
+.mech-pic.tape::before { content: ""; position: absolute; left: -8px; right: -8px; top: 25px; height: 22px; background: rgba(255,214,84,.95); transform: rotate(-24deg); }
+.mech-pic i { position: absolute; left: 50%; top: 50%; width: 28px; height: 28px; margin: -14px; border-radius: 50%; background: var(--ink); color: #FFF; border: 2px solid #FFD654; display: grid; place-items: center; font: 800 16px/1 var(--font-display); font-style: normal; }
+.mech-pic.mystery canvas { filter: brightness(.3) saturate(0); }
+.mech-pic.mystery i { border-color: #FFF; }
+/* How to play */
+.howto .goal { display: flex; align-items: center; gap: 12px; background: #FFF6D8; border: 2px solid var(--gold); border-radius: 14px; padding: 10px 12px; }
+.howto .goal canvas { flex: none; border-radius: 6px; image-rendering: pixelated; box-shadow: 0 0 0 2px #FFF; }
+.howto .goal p { margin: 0; text-align: left; color: var(--ink); font-weight: 700; line-height: 1.35; }
+.howto .goal p b { display: block; font-family: var(--font-display); font-size: 18px; }
+.howto ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.howto li { display: flex; align-items: center; gap: 10px; text-align: left; font-size: 14px; line-height: 1.35; color: var(--ink); }
+.howto li .n { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--ink); color: #FFF; font-family: var(--font-display); font-weight: 800; display: grid; place-items: center; }
+.howto li .pic { flex: none; width: 92px; display: flex; justify-content: center; align-items: center; gap: 3px; padding: 5px; border-radius: 12px; }
+.howto li .pic.tray { border: 2px solid var(--c); background: var(--tint); }
+.howto li .pic.wait { background: #E6E8EC; border: 2px dashed #F0645A; }
+.howto li .pic i { width: 22px; height: 22px; border-radius: 50%; background: rgba(255,255,255,.8); display: block; }
+.howto li .pic canvas { width: 22px; height: 22px; display: block; }
+.howto li .pic.big canvas { width: 44px; height: 44px; }
+.howto .rule { margin: 0; font-size: 13px; color: var(--ink-soft); text-align: center; line-height: 1.45; }
+.howto .rule b { color: var(--ink); }
+.toast { position: absolute; left: 50%; bottom: 84px; transform: translate(-50%, 8px); z-index: 4; pointer-events: none; max-width: 92%; width: max-content; background: var(--ink); color: #FFF; border-radius: 12px; padding: 7px 12px; font-weight: 700; font-size: 13px; line-height: 1.3; text-align: center; opacity: 0; transition: opacity .15s, transform .15s; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+.boosters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.boost { position: relative; min-height: 42px; border-radius: 16px; border: 3px solid #FFF; background: var(--paper-2); box-shadow: 0 0 0 1px rgba(42,36,56,.28), 0 4px 0 rgba(20,16,32,.28); display: flex; align-items: center; justify-content: center; gap: 5px; font-weight: 700; font-size: 12px; white-space: nowrap; color: var(--ink); }
+.boost:active { transform: translateY(3px); box-shadow: 0 0 0 1px rgba(42,36,56,.28), 0 1px 0 rgba(20,16,32,.28); }
+.boost .n { position: absolute; top: -8px; right: -5px; min-width: 22px; height: 22px; padding: 0 4px; border-radius: 11px; background: var(--ink); color: #FFF; border: 2px solid #FFF; font-family: var(--font-display); font-weight: 800; font-size: 12px; line-height: 18px; text-align: center; }
+/* A helper that could not act bumps; the helper that would help most wiggles with a glow. */
+/* The magnet button while the player chooses a tray. */
+.boost.on { outline: 3px solid #FFD654; outline-offset: 2px; transform: translateY(2px); }
+.boost.nope { animation: nope .35s ease; }
+@keyframes nope { 20% { transform: translateX(-6px) rotate(-3deg); } 45% { transform: translateX(5px) rotate(2deg); } 70% { transform: translateX(-3px); } }
+.boost.hint { animation: hint 1.4s ease-in-out infinite; }
+@keyframes hint { 0%, 70%, 100% { transform: none; filter: none; } 78% { transform: rotate(-5deg) scale(1.06); filter: drop-shadow(0 0 6px #FFD654); } 86% { transform: rotate(5deg) scale(1.06); filter: drop-shadow(0 0 8px #FFD654); } 94% { transform: rotate(-2deg); } }
+@media (prefers-reduced-motion: reduce) { .boost.nope, .boost.hint { animation: none; } .boost.hint { outline: 3px solid #FFD654; } }
+.boost:disabled { filter: grayscale(.8); opacity: .5; cursor: default; }
+
+/* Popup */
+.veil { position: fixed; inset: 0; z-index: 20; background: rgba(10,22,36,.6); display: flex; align-items: center; justify-content: center; padding-block: 16px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.card { background: var(--paper); border-radius: 20px; width: 100%; max-width: 360px; max-height: 100%; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 16px 40px rgba(0,0,0,.35); animation: drop .25s cubic-bezier(.2,1.3,.5,1); }
+@keyframes drop { from { transform: translateY(14px) scale(.96); opacity: 0; } }
+.card h2 { margin: 0; font-family: var(--font-display); font-weight: 800; font-size: 26px; line-height: 1.1; text-align: center; text-wrap: balance; }
+.card p { margin: 0; color: var(--ink-soft); line-height: 1.45; text-align: center; }
+.card .acts { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.card .framed { align-self: center; border: 6px solid #FFF; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.25); transform: rotate(-2deg); image-rendering: pixelated; transition: transform .35s cubic-bezier(.2,1.6,.5,1), box-shadow .35s; }
+.card .framed.developed { transform: rotate(-2deg) scale(1.05); box-shadow: 0 0 0 3px var(--gold), 0 8px 24px rgba(0,0,0,.3); }
+.big-stars { display: flex; justify-content: center; gap: 4px; }
+.big-stars .star { width: 52px; height: 52px; animation: pop .4s cubic-bezier(.2,1.7,.5,1) backwards; }
+.big-stars .star:nth-child(2) { transform: translateY(-8px); animation-delay: .18s; }
+.big-stars .star:nth-child(3) { animation-delay: .36s; }
+@keyframes pop { from { transform: scale(0) rotate(-40deg); } }
+#fly, #fx { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+#fly { z-index: 10; }
+#fx { z-index: 40; }
+/* ---------- Craft look: wooden plaques, a quilted frame and sheet, stitched edges, candy-coloured helpers ---------- */
+#app::before { content: ''; position: absolute; inset: 3px -9px; border: 2px dashed rgba(255,255,255,.28); border-radius: 20px; pointer-events: none; }
+#play .hud .btn.sq, #play .hud .mid, #play .hud-stars, #play .pct {
+  background: linear-gradient(#FCEBCB, #E8C48C); border: 3px solid #A8733E; color: #4A2C16;
+  box-shadow: inset 0 2px 0 rgba(255,255,255,.65), inset 0 -3px 0 rgba(150,95,40,.22), 0 3px 0 rgba(40,24,10,.35);
+}
+#play .hud .btn.sq { width: 46px; min-height: 46px; border-radius: 14px; }
+#play .hud .btn.sq:active { transform: translateY(2px); box-shadow: inset 0 2px 0 rgba(255,255,255,.65), 0 1px 0 rgba(40,24,10,.35); }
+#play .hud .btn.help { border-radius: 50%; color: #4A2C16; }
+#play .hud .mid { padding: 4px 10px; border-radius: 14px; text-align: center; }
+#play .hud .mid b { font-size: 16px; }
+#play .hud .mid span { font-size: 11px; opacity: .8; }
+#play .hud { gap: 6px; }
+#play .hud-stars { padding: 6px 5px; }
+#play .hud-stars .star { width: 15px; height: 15px; }
+#play .pct { width: 48px; height: 48px; font-size: 15px; }
+#play .hud-stars { border-radius: 14px; padding: 6px 7px; }
+#play .pct { width: 52px; height: 52px; min-width: 0; padding: 0; border-radius: 50%; display: grid; place-items: center; font-size: 16px; }
+#play .art-card {
+  padding: 12px; border-radius: 22px; border: 3px solid #A8733E;
+  background-color: #E4BD86;
+  background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.2) 0 1.5px, transparent 1.5px 12px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,.2) 0 1.5px, transparent 1.5px 12px), linear-gradient(#F0D3A4, #D9AE72);
+  box-shadow: inset 0 0 0 3px rgba(255,246,226,.55), 0 4px 0 rgba(40,24,10,.35);
+}
+#play .art-card canvas { border-radius: 4px; box-shadow: 0 0 0 4px #FFF8EA; outline: 2px dashed rgba(140,90,40,.65); outline-offset: 6px; }
+#play .boost {
+  color: #FFF; border: 3px solid rgba(255,255,255,.8); font-family: var(--font-display); font-weight: 800; font-size: 14px;
+  text-shadow: 0 1px 0 rgba(70,20,0,.4); box-shadow: inset 0 -4px 0 rgba(0,0,0,.12), 0 4px 0 rgba(40,24,10,.35);
+}
+#play .boost:active { box-shadow: inset 0 -2px 0 rgba(0,0,0,.12), 0 1px 0 rgba(40,24,10,.35); }
+#play .boost:nth-child(1) { background: linear-gradient(#FFC766, #FF9426); }
+#play .boost:nth-child(2) { background: linear-gradient(#FFA287, #F2654C); }
+#play .boost:nth-child(3) { background: linear-gradient(#C8A6FF, #8E63E9); }
+#play .boost .ico { background: rgba(255,255,255,.88); border-radius: 8px; padding: 2px; width: 24px; height: 24px; }
+#play .boost .n { background: #E8453C; }
+/* Hard pictures: a red tag on the plaque and the gallery tile, and a banner when they start. */
+#play.hard .hud .mid { background: linear-gradient(#FFB4A8, #F2705C); border-color: #9E2E22; color: #FFF; }
+#play.hard .hud .mid span { opacity: 1; font-weight: 800; }
+.tile.hard { box-shadow: 0 0 0 3px #E8453C, 0 4px 0 rgba(20,16,32,.28); position: relative; }
+.tile.hard::after { content: 'KHÓ'; position: absolute; top: -8px; right: -6px; background: #E8453C; color: #FFF; font-family: var(--font-display); font-weight: 800; font-size: 11px; padding: 2px 7px; border-radius: 9px; border: 2px solid #FFF; }
+.hard-splash { position: fixed; left: 50%; top: 38%; z-index: 30; transform: translate(-50%, -50%) rotate(-3deg); pointer-events: none; text-align: center; background: linear-gradient(#FF7A64, #E8453C); color: #FFF; border: 4px solid #FFF; border-radius: 20px; padding: 12px 26px; box-shadow: 0 10px 30px rgba(0,0,0,.35); animation: splash 2s ease forwards; }
+/* Praise word: pops over the top of the sticker sheet, then floats up and fades. */
+.praise { position: absolute; left: 50%; top: 22%; z-index: 4; pointer-events: none; white-space: nowrap; font-family: var(--font-display); font-weight: 800; font-size: 34px; line-height: 1; color: #FFD43B; paint-order: stroke fill; -webkit-text-stroke: 7px #7A3FE0; filter: drop-shadow(0 4px 0 rgba(40,20,70,.35)); animation: praise 1.2s cubic-bezier(.2,1.4,.4,1) forwards; }
+@keyframes praise { 0% { transform: translate(-50%, 0) scale(.3) rotate(-8deg); opacity: 0; } 18% { transform: translate(-50%, 0) scale(1.12) rotate(-4deg); opacity: 1; } 30% { transform: translate(-50%, 0) scale(1) rotate(-4deg); } 75% { transform: translate(-50%, -14px) scale(1) rotate(-4deg); opacity: 1; } 100% { transform: translate(-50%, -34px) scale(.92) rotate(-4deg); opacity: 0; } }
+.perfect { align-self: center; font-family: var(--font-display); font-weight: 800; font-size: 22px; color: #FFF; background: linear-gradient(#FFB020, #FF7A2F); border-radius: 999px; padding: 4px 18px; transform: rotate(-3deg); box-shadow: 0 3px 0 rgba(0,0,0,.18); }
+@media (prefers-reduced-motion: reduce) { .praise { animation: none; transform: translate(-50%, 0); } }
+.hard-splash b { display: block; font-family: var(--font-display); font-size: 34px; line-height: 1; letter-spacing: 1px; }
+.hard-splash span { display: block; font-size: 13px; font-weight: 700; margin-top: 4px; }
+@keyframes splash { 0% { opacity: 0; transform: translate(-50%, -50%) rotate(-3deg) scale(.4); } 15% { opacity: 1; transform: translate(-50%, -50%) rotate(-3deg) scale(1.08); } 25% { transform: translate(-50%, -50%) rotate(-3deg) scale(1); } 80% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -60%) rotate(-3deg) scale(1); } }
+/* Sticker book: the book is its own frame, so the wooden card around the picture steps back. */
+#play .art-card { padding: 0; background: none; border: 0; box-shadow: 0 6px 0 rgba(40,24,10,.35); border-radius: 14px; }
+#play .art-card canvas { outline: none; box-shadow: none; border-radius: 0; }
+.tile canvas.mini-book { aspect-ratio: 5 / 3; border-radius: 6px; image-rendering: auto; }
+.card .page-shot { align-self: center; border-radius: 10px; box-shadow: 0 6px 18px rgba(0,0,0,.3); transform: rotate(-1.5deg); transition: transform .35s cubic-bezier(.2,1.6,.5,1), box-shadow .35s; }
+.card .page-shot.developed { transform: rotate(-1.5deg) scale(1.05); box-shadow: 0 0 0 3px var(--gold), 0 8px 24px rgba(0,0,0,.3); }
+/* Short phone screens: slimmer plaques and buttons so the sticker sheet keeps its room. */
+@media (max-height: 720px) {
+  .screen { gap: 5px; padding-block: 6px; }
+  #play .hud .btn.sq { width: 40px; min-height: 40px; }
+  #play .pct { width: 42px; height: 42px; font-size: 14px; }
+  #play .hud .mid { padding: 2px 8px; }
+  #play .hud .mid b { font-size: 15px; }
+  #play .hud .mid span { font-size: 10px; }
+  #play .hud-stars { padding: 4px 4px; }
+  #play .art-card { padding: 8px; border-radius: 18px; }
+  #play .art-card canvas { outline-offset: 4px; box-shadow: 0 0 0 3px #FFF8EA; }
+  #play .boost { min-height: 38px; font-size: 13px; }
+  #play .boost .ico { width: 20px; height: 20px; }
+}
+@media (prefers-reduced-motion: reduce) { .card, .big-stars .star { animation: none; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <section class="screen" id="home" hidden></section>
+  <section class="screen" id="play" hidden>
+    <div class="hud">
+      <button class="btn sq" id="backBtn" type="button" aria-label="Về danh sách tranh"><svg class="ico" viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8" fill="none" stroke="#2A2438" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <div class="mid"><span id="lvNum"></span><b id="lvName"></b></div>
+      <div class="hud-stars" id="hudStars"></div>
+      <div class="pct" id="pct">0%</div>
+      <button class="btn sq help" id="helpBtn" type="button" aria-label="Cách chơi">?</button>
+    </div>
+    <div class="art-card">
+      <canvas id="art" aria-label="Cuốn sổ sticker đang dán"></canvas>
+    </div>
+    <canvas id="trays" aria-label="Khay đơn và hàng chờ"></canvas>
+    <div class="stage" id="stage">
+      <canvas id="board" tabindex="0" aria-label="Tờ sticker"></canvas>
+      <div class="toast" id="toast" role="status"></div>
+    </div>
+    <div class="boosters" id="boosters"></div>
+  </section>
+  <div id="modals"></div>
+</div>
+<canvas id="fly"></canvas>
+<canvas id="fx"></canvas>
+<!--BUILD:SCRIPTS-START-->
+<script src="js/core.js"></script>
+<script src="js/art.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/i18n.js"></script>
+<script src="js/game.js"></script>
+<script src="js/image-levels.js"></script>
+<script src="js/pixel-levels.js"></script>
+<script src="js/orders.js"></script>
+<script src="js/pixel.js"></script>
+<!--BUILD:SCRIPTS-END-->
+</body>
+</html>
