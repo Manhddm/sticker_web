@@ -91,7 +91,6 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid var(--gold); out
 .hud-stars .star { width: 18px; height: 18px; }
 .art-card { flex: none; align-self: center; background: var(--paper); border-radius: 16px; padding: 6px; box-shadow: 0 4px 0 rgba(20,16,32,.28); position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .art-card canvas { display: block; }
-#trays { display: block; width: 100%; flex: none; }
 .stage { position: relative; flex: 1; min-height: 0; }
 #board { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; }
 .btn.help { font-size: 20px; }
@@ -125,13 +124,9 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid var(--gold); out
 .boost:active { transform: translateY(3px); box-shadow: 0 0 0 1px rgba(42,36,56,.28), 0 1px 0 rgba(20,16,32,.28); }
 .boost .n { position: absolute; top: -8px; right: -5px; min-width: 22px; height: 22px; padding: 0 4px; border-radius: 11px; background: var(--ink); color: #FFF; border: 2px solid #FFF; font-family: var(--font-display); font-weight: 800; font-size: 12px; line-height: 18px; text-align: center; }
 /* A helper that could not act bumps; the helper that would help most wiggles with a glow. */
-/* The magnet button while the player chooses a tray. */
-.boost.on { outline: 3px solid #FFD654; outline-offset: 2px; transform: translateY(2px); }
 .boost.nope { animation: nope .35s ease; }
 @keyframes nope { 20% { transform: translateX(-6px) rotate(-3deg); } 45% { transform: translateX(5px) rotate(2deg); } 70% { transform: translateX(-3px); } }
-.boost.hint { animation: hint 1.4s ease-in-out infinite; }
-@keyframes hint { 0%, 70%, 100% { transform: none; filter: none; } 78% { transform: rotate(-5deg) scale(1.06); filter: drop-shadow(0 0 6px #FFD654); } 86% { transform: rotate(5deg) scale(1.06); filter: drop-shadow(0 0 8px #FFD654); } 94% { transform: rotate(-2deg); } }
-@media (prefers-reduced-motion: reduce) { .boost.nope, .boost.hint { animation: none; } .boost.hint { outline: 3px solid #FFD654; } }
+@media (prefers-reduced-motion: reduce) { .boost.nope { animation: none; } }
 .boost:disabled { filter: grayscale(.8); opacity: .5; cursor: default; }
 
 /* Popup */
@@ -238,7 +233,6 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid var(--gold); out
     <div class="art-card">
       <canvas id="art" aria-label="Cuốn sổ sticker đang dán"></canvas>
     </div>
-    <canvas id="trays" aria-label="Hộp sticker"></canvas>
     <div class="stage" id="stage">
       <canvas id="board" tabindex="0" aria-label="Tờ sticker"></canvas>
       <div class="toast" id="toast" role="status"></div>

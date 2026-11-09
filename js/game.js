@@ -1232,6 +1232,8 @@
   PO.Game = {
     bind: bind, start: start, stop: stop, setPaused: setPaused, useBooster: useBooster, configure: configure,
     continueWithSlots: continueWithSlots, canUndo: canUndo,
+    /* The types in the tray now, not counting a triple already bursting. */
+    trayTypes: function () { return tray.filter(function (s) { return !s.merge; }).map(function (s) { return s.type; }); },
     /* Conveyor mode: the page decides the end of a level and can resume after a continue. */
     end: function (won) {
       if (state !== 'play') return;

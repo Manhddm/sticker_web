@@ -1,56 +1,45 @@
-/* Checks every Sổ Sticker level: the sheet holds exactly the stickers the book's pages ask for, the proof order
-   wins within the tray, and a careful player wins often enough. Prints how hard each level plays.
-   Run: node tools/test-hunt.js */
+/* Checks every Sổ Sticker level (tile match): the sheet holds three of each slot's sticker plus the decoy triples
+   and nothing else, the proof order wins inside the 7-slot tray, and an attentive player (10% careless moves) wins often enough.
+   Prints how hard each level plays. Run: node tools/test-hunt.js */
 'use strict';
 require('../js/core.js');
 require('../js/hunt.js');
 var C = globalThis.PO.Core, H = globalThis.PO.Hunt, bad = 0;
 var pct = function (v) { return (Math.round(v * 100) + '%').padStart(4); };
+var count = function (list) { var c = {}; list.forEach(function (t) { c[t] = (c[t] || 0) + 1; }); return c; };
 
 H.PAGES.forEach(function (p, i) {
   var b = H.build(i), level = C.buildLevel(b.cfg), st = level.stickers;
-  /* The sheet holds every copy the pages want, plus the level's decoys, and nothing else. */
-  var want = H.countOf(b.targets.concat(b.decoyTypes.length ? Array.apply(null, { length: p.decoys }).map(function () { return b.decoyTypes[0]; }) : [])), have = H.countOf(st.map(function (s) { return s.type; }));
-  if (b.decoyTypes.some(function (t) { return b.targets.indexOf(t) >= 0; })) { bad++; console.log('Level ' + (i + 1) + ': a decoy type is on a page'); }
-  /* At most 7 kinds to chunk at once: over the level, or over each scene of a story chapter. */
-  (p.scenes ? b.missions.filter(function (m, k) { return k % 2 === 0; }).map(function (m, k) { return H.countOf(m.concat(b.missions[2 * k + 1])); }) : [have]).forEach(function (c) { if (Object.keys(c).length > 7) { bad++; console.log('Level ' + (i + 1) + ': more than 7 sticker types'); } });
+  var want = count([].concat(b.targets, b.targets, b.targets, b.decoys, b.decoys, b.decoys)), have = count(st.map(function (s) { return s.type; }));
   Object.keys(want).concat(Object.keys(have)).forEach(function (t) { if (want[t] !== have[t]) { bad++; console.log('Level ' + (i + 1) + ': sticker ' + t + ' wanted ' + (want[t] || 0) + ', on sheet ' + (have[t] || 0)); } });
-  if (p.missions.length % 2) { bad++; console.log('Level ' + (i + 1) + ': odd page count'); }
-  if (Math.max.apply(null, p.missions) > p.cap) { bad++; console.log('Level ' + (i + 1) + ': a page needs more than the tray holds'); }
-  /* The proof: peeling in the dealt order never overfills the tray. */
-  var m = new H.Model(b.missions, p.cap), ok = true;
+  if (b.decoys.some(function (t) { return b.targets.indexOf(t) >= 0; })) { bad++; console.log('Level ' + (i + 1) + ': a decoy is also a slot'); }
+  var proof = C.replaySolution(level, C.BASE_CAP);
+  if (!proof.ok) { bad++; console.log('Level ' + (i + 1) + ': proof order does not win (' + proof.why + ')'); }
+  var careful = 0, casual = 0, N = 40;
+  for (var k = 0; k < N; k++) { if (C.playBot(level, 0.1, k + 1).win) careful++; if (C.playBot(level, 0.3, k + 1).win) casual++; }
+  if (careful / N < 0.5) bad++;
+  console.log(('L' + (i + 1) + (p.hard ? ' [KHÓ]' : '')).padEnd(10) + st.length + ' stickers, slots ' + b.missions.map(function (m) { return m.length; }).join('/') +
+    ', proof peak ' + proof.peak + ' | careful ' + pct(careful / N) + ' casual ' + pct(casual / N) + (careful / N < 0.5 ? '  << TOO HARD' : ''));
+});
+/* The book's bookkeeping, played along each level's proof order: every burst lands in a slot of the open spread
+   or is kept, kept triples fill the next spreads as they open, and in the end every slot is full and nothing is
+   left kept. */
+H.PAGES.forEach(function (p, i) {
+  var b = H.build(i), level = C.buildLevel(b.cfg), M = b.missions, held = {}, credit = {}, spread = 0, filled = H.openCredit(M, 0, credit);
+  var full = function (s) { for (var q = s * 2; q < s * 2 + 2 && q < M.length; q++) if (filled[q].indexOf(false) >= 0) return false; return true; };
   level.solution.forEach(function (id) {
-    if (!ok) return;
-    if (!m.place({ type: st[id].type })) ok = false;
-    var set;
-    while ((set = m.ready())) m.fill(set);
+    var t = level.stickers[id].type;
+    held[t] = (held[t] || 0) + 1;
+    if (held[t] < 3) return;
+    held[t] = 0;
+    var to = H.place(M, spread, filled, credit, t);
+    if (to === 'credit') credit[t] = (credit[t] || 0) + 1;
+    else if (to) filled[to.page][to.slot] = true;
+    else if (b.decoys.indexOf(t) < 0) { bad++; console.log('Level ' + (i + 1) + ': a triple of ' + t + ' found no slot'); }
+    while (full(spread) && spread * 2 + 2 < M.length) { spread++; var got = H.openCredit(M, spread, credit); for (var q in got) filled[q] = got[q]; }
   });
-  if (!ok || !m.done()) { bad++; console.log('Level ' + (i + 1) + ': proof order does not win'); }
-  var r = H.setup(level, b.missions, p.cap);
-  if (r.smart < 0.5) bad++;
-  console.log(('L' + (i + 1) + (p.hard ? ' [KHÓ]' : '')).padEnd(10) + st.length + ' stickers, pages ' + p.missions.join('/') + ', tray ' + r.cap +
-    ' | smart ' + pct(r.smart) + ' casual ' + pct(r.casual) + ' | par ' + r.par + (r.smart < 0.5 ? '  << TOO HARD' : ''));
+  var left = Object.keys(credit).filter(function (t) { return credit[t]; });
+  if (!full(spread) || spread * 2 + 2 < M.length || left.length) { bad++; console.log('Level ' + (i + 1) + ': book not full at the end (spread ' + spread + ', kept ' + left + ')'); }
 });
-/* Stars against par. */
-[[0, 0, 3], [2, 0, 2], [3, 0, 1], [6, 6, 3], [8, 6, 2], [9, 6, 1]].forEach(function (c) {
-  if (H.starsFor(c[0], c[1]) !== c[2]) { bad++; console.log('starsFor(' + c[0] + ', ' + c[1] + ') should be ' + c[2]); }
-});
-/* Both pages of a spread are open: whichever set the tray completes first fills, and only its stickers leave. */
-var mm = new H.Model([[1, 1, 2], [3], [4], [4]], 4);
-mm.place({ type: 1 }); mm.place({ type: 4 }); mm.place({ type: 1 });
-if (mm.ready() || mm.short(1) || mm.short(2) !== 1 || mm.short(3) !== 1 || mm.short(4)) { bad++; console.log('A page filled before its set was complete, or the next spread counted'); }
-mm.place({ type: 3 });
-var set = mm.ready();
-if (!set || set.page !== 1 || set.length !== 1) { bad++; console.log('The right page should fill first'); }
-else {
-  mm.fill(set);
-  if (mm.cur !== 0 || mm.ready()) { bad++; console.log('The spread should stay open until both pages are full'); }
-  mm.place({ type: 2 }); set = mm.ready();
-  if (!set || set.page !== 0) { bad++; console.log('The left page should fill after the right one'); }
-  else { mm.fill(set); if (mm.cur !== 2 || mm.used() !== 1 || !mm.ready()) { bad++; console.log('The next spread should open and take the sticker left in the tray'); } }
-}
-/* A sticker still flying to the tray does not count yet. */
-var mf = new H.Model([[5]], 2); mf.place({ type: 5, landed: false });
-if (mf.ready()) { bad++; console.log('A sticker in flight filled a page'); }
 if (bad) { console.log(bad + ' check(s) failed'); process.exit(1); }
 console.log('All levels OK');
