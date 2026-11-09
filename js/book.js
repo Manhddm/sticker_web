@@ -626,11 +626,7 @@
         var s = el('div', 'big-stars'); s.innerHTML = stars(starsWon); card.appendChild(s);
         if (starsWon === 3 && r.peak <= 3) card.appendChild(el('div', 'perfect', 'Hoàn hảo!'));
         card.appendChild(el('h2', '', last ? 'Đầy cả cuốn sổ!' : 'Dán kín mọi trang!'));
-        var c = el('canvas', 'page-shot'), cw2 = 280, ch2 = 168, rr = Math.min(root.devicePixelRatio || 1, 2);
-        c.width = cw2 * rr; c.height = ch2 * rr; c.style.width = cw2 + 'px'; c.style.height = ch2 + 'px';
-        var cx2 = c.getContext('2d'); cx2.setTransform(rr, 0, 0, rr, 0, 0);
-        drawBook(cx2, cw2, ch2, { left: left, right: right }, { full: true, title: missionTitle(), scene: sceneImage(sceneOf(shown)) });
-        card.appendChild(c);
+        var c = bookViewer(card);
         setTimeout(function () { c.classList.add('developed'); Snd.star(4); }, reduced ? 0 : 350);
         var lim = PO.Core.starLimits(lv.cfg), sc = el('p', 'score'); sc.innerHTML = 'Khay đầy nhất <b>' + r.peak + '</b> ô · 3 sao khi không quá <b>' + lim.three + '</b>'; card.appendChild(sc);
         card.appendChild(el('p', '', continued ? 'Hoàn thành nhờ thêm ô. Chơi lại không thêm ô để có thêm sao.' : starsWon === 3 ? 'Khay gọn gàng. Tuyệt vời!' : 'Giữ khay gọn hơn (gom cho đủ bộ đang dở trước) để được 3 sao.'));
@@ -641,6 +637,50 @@
         card.appendChild(a);
       });
     }, reduced ? 300 : 1300);
+  }
+  /* The finished book on the win card turns itself: it opens on the first spread and flips page by page, with the
+     same turn as in play, until the last spread, where it stays. */
+  function bookViewer(card) {
+    var n = spreads(), cur = 0, busyTurn = false, cw = 260, ch = 156, rr = Math.min(root.devicePixelRatio || 1, 2);
+    var c = el('canvas', 'page-shot'), x = c.getContext('2d');
+    c.width = cw * rr; c.height = ch * rr; c.style.width = cw + 'px'; c.style.height = ch + 'px';
+    function shot(s) {
+      var cv = document.createElement('canvas'), sc = lv.def.scenes && lv.def.scenes[s];
+      cv.width = c.width; cv.height = c.height;
+      var cx = cv.getContext('2d'); cx.setTransform(rr, 0, 0, rr, 0, 0);
+      drawBook(cx, cw, ch, spreadOf(lv.def, lv.missions, s, lv.cfg.seed), { full: true, title: sc ? sc.title : 'Trang đôi ' + (s + 1) + '/' + n, scene: sceneImage(sc) });
+      return cv;
+    }
+    function show() { x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, c.width, c.height); x.drawImage(shot(cur), 0, 0); }
+    /* The right page turns over the spine onto the left; under it the next spread's right page is already waiting. */
+    function turn() {
+      if (busyTurn || cur >= n - 1 || !c.isConnected) return;
+      var from = shot(cur), to = shot(cur + 1), t0 = performance.now(), W = c.width, H = c.height;
+      var spine = W / 2, pw = 0.455 * W, py = 0.07 * H, ph = 0.87 * H;
+      cur++; busyTurn = true; Snd.wind(0.5);
+      if (reduced) { busyTurn = false; show(); autoTurn(); return; }
+      requestAnimationFrame(function step(now) {
+        var t = Math.min(1, (now - t0) / 600), e = ease(t), k;
+        x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, W, H);
+        x.drawImage(from, 0, 0);
+        x.drawImage(to, spine, 0, W - spine, H, spine, 0, W - spine, H);
+        if (e < 0.5) {
+          k = Math.cos(e * Math.PI);
+          x.drawImage(from, spine, py, pw, ph, spine, py, pw * k, ph);
+          x.fillStyle = 'rgba(60,30,10,' + (1 - k) * 0.35 + ')'; x.fillRect(spine, py, pw * k, ph);
+        } else {
+          k = -Math.cos(e * Math.PI);
+          x.drawImage(to, spine - pw, py, pw, ph, spine - pw * k, py, pw * k, ph);
+          x.fillStyle = 'rgba(60,30,10,' + (1 - k) * 0.3 + ')'; x.fillRect(spine - pw * k, py, pw * k, ph);
+        }
+        if (t < 1) requestAnimationFrame(step); else { busyTurn = false; show(); autoTurn(); }
+      });
+    }
+    function autoTurn() { if (cur < n - 1) setTimeout(turn, 1400); }
+    card.appendChild(c);
+    show();
+    autoTurn();
+    return c;
   }
   $('backBtn').addEventListener('click', function () { Snd.click(); showHome(); });
 
