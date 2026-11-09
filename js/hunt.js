@@ -1,8 +1,8 @@
 /* Sổ Sticker rules: no DOM, so tools/test-hunt.js can check every level in Node.
    Each page of the book is a mission: a set of stickers with counts (two strawberries, one grape...). Every peeled
-   sticker goes into the tray. When the tray holds the whole set of the open page, the set flies into that page and
-   the next page opens: the left page, then the right one, then the book turns. Lost: the tray is full and holds no
-   complete set. */
+   sticker goes into the tray. Both pages of the open spread take stickers, in any order: when the tray holds the
+   whole set of either page, the set flies into it; when both are full the book turns. Lost: the tray is full and
+   holds no complete set. */
 (function (root) {
   'use strict';
   var PO = root.PO = root.PO || {};
@@ -17,7 +17,8 @@
   function Model(missions, cap) {
     this.missions = missions;
     this.cap = cap;
-    this.cur = 0;
+    this.cur = 0;        // first page of the open spread
+    this.got = [];       // pages already filled
     this.box = [];
     for (var i = 0; i < MAX_CAP; i++) this.box.push(null);
   }
@@ -37,28 +38,51 @@
     this.box.forEach(function (it) { if (it && it.type === type && (!landed || it.landed !== false)) n++; });
     return n;
   };
-  /* What the open page still lacks of `type` once the tray's copies are counted. */
-  Model.prototype.short = function (type) {
-    if (this.done()) return 0;
-    var need = countOf(this.missions[this.cur])[type] || 0;
-    return Math.max(0, need - this.have(type));
-  };
-  /* The tray stickers that complete the open page, or null while its set is not all there and landed. */
-  Model.prototype.ready = function () {
-    if (this.done()) return null;
-    var need = countOf(this.missions[this.cur]), out = [];
-    for (var t in need) {
-      var got = this.box.filter(function (it) { return it && it.type === +t && it.landed !== false; }).slice(0, need[t]);
-      if (got.length < need[t]) return null;
-      out = out.concat(got);
-    }
+  /* The pages of the open spread still waiting for their set. */
+  Model.prototype.open = function () {
+    var out = [];
+    for (var p = this.cur; p < this.cur + 2 && p < this.missions.length; p++) if (!this.got[p]) out.push(p);
     return out;
   };
-  /* Takes a completed set out of the tray into the page, and opens the next page. */
+  /* What the open pages together still lack of `type` once the tray's copies are counted. */
+  Model.prototype.short = function (type) {
+    var m = this.missions, need = 0;
+    this.open().forEach(function (p) { need += countOf(m[p])[type] || 0; });
+    return Math.max(0, need - this.have(type));
+  };
+  /* The open page closest to complete: a careful player gathers for it first, so the tray does not hold two halves. */
+  Model.prototype.focus = function () {
+    var m = this, best = -1, least = Infinity;
+    this.open().forEach(function (p) {
+      var need = countOf(m.missions[p]), lack = 0;
+      for (var t in need) lack += Math.max(0, need[t] - m.have(+t));
+      if (lack < least) { least = lack; best = p; }
+    });
+    return best;
+  };
+  /* What page p still lacks of `type`. */
+  Model.prototype.shortOn = function (type, p) { return p < 0 ? 0 : Math.max(0, (countOf(this.missions[p])[type] || 0) - this.have(type)); };
+  /* The tray stickers that complete an open page (the left one first), or null while no set is all there and
+     landed. out.page is the page they fill. */
+  Model.prototype.ready = function () {
+    var box = this.box, pages = this.open();
+    for (var k = 0; k < pages.length; k++) {
+      var need = countOf(this.missions[pages[k]]), out = [];
+      for (var t in need) {
+        var got = box.filter(function (it) { return it && it.type === +t && it.landed !== false; }).slice(0, need[t]);
+        if (got.length < need[t]) { out = null; break; }
+        out = out.concat(got);
+      }
+      if (out) { out.page = pages[k]; return out; }
+    }
+    return null;
+  };
+  /* Takes a completed set out of the tray into its page; a spread with both pages full gives way to the next. */
   Model.prototype.fill = function (set) {
     var b = this.box;
     set.forEach(function (it) { b[it.slot] = null; });
-    this.cur++;
+    this.got[set.page] = true;
+    while (!this.done() && !this.open().length) this.cur += 2;
   };
   Model.prototype.done = function () { return this.cur >= this.missions.length; };
 
@@ -101,52 +125,28 @@
   }
 
   /* ---------- the levels ----------
-     Laid out with the sticker-level-* skills (curriculum, generate-and-test, chokepoints, review); the curriculum
-     table is in README.md. tier: the beat it plays in the batch (targets for the careful bot in tools/level-lab.js);
-     missions: stickers per page of the book (even count, two pages a spread); kinds: different stickers per page;
-     pool: different stickers the pages draw from (at most 7 with the decoy type); cap: tray slots (at least the
-     biggest page, at most 8 so Thêm ô can still add one); bottom: share of the sheet in its first layer (less means
-     deeper stacks); spread: how often the proof peels for the next page; decoys / lids: stickers no page wants,
-     and how many of them lie on top of page stickers; salt: the candidate generate-and-test picked.
-     Each level collects one album; ids are album * 10 + design. */
-  var LEVELS = [
-    { tier: 'teach', missions: [3, 3], kinds: 2, pool: 3, cap: 7, bottom: 0.6, spread: 0.2, decoys: 0, lids: 0, mods: {}, salt: 1 },
-    { tier: 'practice', missions: [3, 3, 3, 3], kinds: 2, pool: 4, cap: 6, bottom: 0.45, spread: 0.3, decoys: 0, lids: 0, mods: {}, salt: 6 },
-    { tier: 'practice', missions: [4, 4, 4, 4], kinds: 3, pool: 4, cap: 6, bottom: 0.45, spread: 0.4, decoys: 0, lids: 0, mods: {}, salt: 5 },
-    { tier: 'twist', missions: [5, 5, 5, 5], kinds: 3, pool: 5, cap: 6, bottom: 0.45, spread: 0.4, decoys: 2, lids: 2, mods: {}, salt: 24 },
-    { tier: 'hard', missions: [5, 5, 5, 5], kinds: 3, pool: 5, cap: 6, bottom: 0.35, spread: 0.6, decoys: 2, lids: 1, mods: {}, salt: 4 },
-    { tier: 'breather', missions: [3, 4, 3, 4], kinds: 2, pool: 4, cap: 7, bottom: 0.55, spread: 0.2, decoys: 0, lids: 0, mods: {}, salt: 12 },
-    { tier: 'teach', missions: [4, 4, 4, 4], kinds: 3, pool: 4, cap: 7, bottom: 0.5, spread: 0.3, decoys: 0, lids: 0, mods: { mystery: 0.15 }, salt: 8 },
-    { tier: 'practice', missions: [5, 5, 5, 5], kinds: 3, pool: 5, cap: 7, bottom: 0.45, spread: 0.4, decoys: 2, lids: 1, mods: { mystery: 0.12 }, salt: 4 },
-    { tier: 'twist', missions: [5, 5, 5, 5, 5, 5], kinds: 4, pool: 6, cap: 6, bottom: 0.4, spread: 0.5, decoys: 2, lids: 1, mods: { mystery: 0.1 }, salt: 1 },
-    { tier: 'hard', missions: [6, 6, 6, 6], kinds: 4, pool: 6, cap: 7, bottom: 0.35, spread: 0.6, decoys: 3, lids: 2, mods: { mystery: 0.1 }, salt: 13 },
-    { tier: 'breather', missions: [4, 4, 4, 4], kinds: 3, pool: 5, cap: 7, bottom: 0.5, spread: 0.2, decoys: 0, lids: 0, mods: {}, salt: 7 },
-    { tier: 'superhard', missions: [6, 6, 6, 6, 6, 6], kinds: 4, pool: 6, cap: 7, bottom: 0.3, spread: 0.6, decoys: 2, lids: 2, mods: { mystery: 0.1 }, salt: 4 }
-  ];
-  /* ---------- story chapters ----------
-     Each spread is one scene (a ChatGPT background, js/scene-images.js) with stickers stuck where they belong in
-     it. The left half's stickers are the left page's mission, the right half's the right page's. A slot is
-     [sticker id, x, y, size]: x and y are 0..1 of the picture, size a share of the book's height. Camp stickers:
-     50 tent, 51 campfire, 52 mushroom, 53 maple leaf, 54 pine, 55 flower, 56 backpack, 57 acorn, 58 rainbow,
-     59 cloud. A decoy is a sticker that does not belong in the story at all. */
-  var STORIES = {
-    camp: { title: 'Chuyến dã ngoại', album: 5, decoyTypes: [10], scenes: [
-      { img: 'camp-1', title: 'Tới bìa rừng', line: 'Sáng sớm, cả nhà đến bìa rừng. Trồng thêm cây, gọi mây về cho bức tranh nào!',
-        left: [[54, 0.12, 0.42, 0.26], [54, 0.32, 0.38, 0.22], [59, 0.24, 0.14, 0.24], [55, 0.40, 0.74, 0.15]],
-        right: [[59, 0.74, 0.13, 0.24], [55, 0.62, 0.76, 0.15], [55, 0.88, 0.66, 0.15], [56, 0.72, 0.52, 0.19]] },
-      { img: 'camp-2', title: 'Dựng trại', line: 'Tìm chỗ bằng phẳng ven hồ để dựng lều và nhóm lửa.',
-        left: [[50, 0.18, 0.50, 0.28], [56, 0.34, 0.66, 0.18], [54, 0.07, 0.38, 0.24], [54, 0.44, 0.38, 0.22]],
-        right: [[51, 0.66, 0.66, 0.22], [57, 0.78, 0.82, 0.14], [57, 0.91, 0.78, 0.14], [52, 0.56, 0.82, 0.16]] },
-      { img: 'camp-3', title: 'Dạo rừng thu', line: 'Chiều dạo rừng, nhặt nấm, lá phong và hạt dẻ.',
-        left: [[52, 0.10, 0.72, 0.17], [52, 0.32, 0.66, 0.15], [53, 0.18, 0.30, 0.17], [53, 0.40, 0.46, 0.15], [57, 0.42, 0.80, 0.14]],
-        right: [[53, 0.62, 0.34, 0.17], [53, 0.86, 0.50, 0.15], [57, 0.70, 0.80, 0.14], [57, 0.92, 0.76, 0.14], [52, 0.58, 0.68, 0.17]] },
-      { img: 'camp-4', title: 'Sau cơn mưa', line: 'Mưa tạnh, cầu vồng hiện lên. Tối nay quây quần bên lửa trại!',
-        left: [[58, 0.25, 0.27, 0.32], [59, 0.08, 0.16, 0.20], [59, 0.42, 0.12, 0.20], [55, 0.14, 0.80, 0.15], [55, 0.38, 0.86, 0.15]],
-        right: [[50, 0.65, 0.58, 0.26], [51, 0.80, 0.68, 0.20], [55, 0.58, 0.84, 0.15], [55, 0.95, 0.70, 0.15], [59, 0.76, 0.14, 0.22]] }
-    ] }
-  };
+     Each level is a story chapter (STORIES below). tier: the beat it plays (targets for the careful bot in
+     tools/level-lab.js); cap: tray slots (at least the biggest page, at most 8 so Thêm ô can still add one); bottom:
+     share of the sheet in its first layer (less means deeper stacks); spread: how often the proof peels for the next
+     page; decoys / lids: stickers no page wants, and how many of them lie on top of page stickers; salt: the
+     candidate generate-and-test picked. Ids are album * 10 + design. */
+  var LEVELS = [];
+  var STORIES = {};
+  /* A chapter gives each page its own picture (imgL, imgR; fullL / fullR: the original illustration a full page
+     fades into). A slot is [sticker id, x, y, size]: x and y are 0..1 of its page, size a share of the book's
+     height. A decoy is a sticker that does not belong in the story (52: the camp album's mushroom). Beach stickers (art from ChatGPT + Gemini): 60 Mia, 61 Bo, 62 umbrella,
+     63 crab, 64 beach ball, 65 sandcastle, 66 dolphin, 67 starfish, 68 seashell, 69 campfire. Listed back to
+     front: a later slot is drawn over an earlier one. */
+  STORIES.beach = { title: 'Ngày hội bãi biển', album: 6, decoyTypes: [52], scenes: [
+    { imgL: 'beach-1', imgR: 'beach-2', fullL: 'beach-1-full', fullR: 'beach-2-full', title: 'Tới bãi biển', line: 'Mia và Bo tới bãi biển! Dựng ô, gọi cua ra chơi rồi xây lâu đài cát nào.',
+      left: [[62, 0.53, 0.36, 0.24], [60, 0.22, 0.52, 0.44], [61, 0.78, 0.54, 0.44], [64, 0.46, 0.69, 0.14], [63, 0.13, 0.78, 0.11], [63, 0.8, 0.89, 0.11]],
+      right: [[64, 0.18, 0.5, 0.15], [65, 0.5, 0.58, 0.3], [67, 0.13, 0.81, 0.13], [67, 0.87, 0.67, 0.12], [63, 0.73, 0.86, 0.13]] },
+    { imgL: 'beach-3', imgR: 'beach-4', fullL: 'beach-3-full', fullR: 'beach-4-full', title: 'Ra khơi', line: 'Cá heo ghé chào! Nhặt sao biển, vỏ sò, rồi tối nay quây quần bên lửa trại.',
+      left: [[66, 0.58, 0.38, 0.3], [67, 0.25, 0.73, 0.13], [68, 0.13, 0.87, 0.12], [67, 0.75, 0.84, 0.13], [68, 0.87, 0.91, 0.1]],
+      right: [[60, 0.26, 0.55, 0.44], [61, 0.77, 0.55, 0.44], [69, 0.51, 0.72, 0.18], [63, 0.35, 0.87, 0.11], [63, 0.72, 0.86, 0.11]] }
+  ] };
   /* A story level: the chapter's scenes, played as one level (two pages per scene). */
-  LEVELS.push({ tier: 'practice', story: 'camp', cap: 7, bottom: 0.45, spread: 0.4, decoys: 2, lids: 1, mods: {}, salt: 2 });
+  LEVELS.push({ tier: 'practice', story: 'beach', cap: 7, bottom: 0.45, spread: 0.4, decoys: 2, lids: 1, mods: {}, salt: 1 });
   LEVELS.forEach(function (p) {
     var s = STORIES[p.story];
     if (!s) return;
@@ -154,21 +154,14 @@
     p.missions = [].concat.apply([], s.scenes.map(function (sc) { return [sc.left.length, sc.right.length]; }));
   });
   var SHAPES = ['full', 'circle', 'heart', 'diamond', 'full', 'butterfly', 'circle', 'arch', 'heart', 'diamond', 'full', 'butterfly'];
-  LEVELS.forEach(function (p, i) { if (p.album === undefined) p.album = i % 6; p.hard = p.tier === 'hard' || p.tier === 'superhard'; });
+  LEVELS.forEach(function (p) { p.hard = p.tier === 'hard' || p.tier === 'superhard'; });
   /* Everything the sheet engine and the book need to set up level i. */
   function build(i) {
-    var p = LEVELS[i], salt = p.salt || 0, rng = rngOf(9157 + i * 7919 + salt * 104729);
-    var designs = shuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], rng).map(function (d) { return p.album * 10 + d; });
-    var pool = designs.slice(0, p.pool), decoyTypes = !p.decoys ? [] : p.decoyTypes || designs.slice(p.pool, p.pool + 1);
-    /* A story page wants exactly the stickers drawn into its half of the scene. */
-    var slotTypes = function (half) { return half.map(function (sl) { return sl[0]; }).sort(function (a, b) { return a - b; }); };
-    var missions = p.scenes ? [].concat.apply([], p.scenes.map(function (sc) { return [slotTypes(sc.left), slotTypes(sc.right)]; })) : p.missions.map(function (n) {
-      /* `kinds` different stickers from the pool, at least one copy each, the rest of the page spread over them. */
-      var kinds = shuffle(pool.slice(), rng).slice(0, Math.min(p.kinds, n));
-      var page = kinds.slice();
-      while (page.length < n) page.push(kinds[Math.floor(rng() * kinds.length)]);
-      return page.sort(function (a, b) { return a - b; });
-    });
+    var p = LEVELS[i], salt = p.salt || 0;
+    var decoyTypes = p.decoys ? p.decoyTypes : [];
+    /* A page wants exactly the stickers drawn on it. */
+    var slotTypes = function (page) { return page.map(function (sl) { return sl[0]; }).sort(function (x, y) { return x - y; }); };
+    var missions = [].concat.apply([], p.scenes.map(function (sc) { return [slotTypes(sc.left), slotTypes(sc.right)]; }));
     var count = missions.reduce(function (s, m) { return s + m.length; }, 0) + (p.decoys || 0);
     var cfg = {
       n: i + 1, seed: 4241 + i * 7919 + salt * 31, album: p.album, mixed: true, belt: true, quilt: true,
@@ -191,11 +184,12 @@
      and lacked, else 0.5. `rescue` extra tray slots save a lost run, like the Thêm ô helper (booster lift). */
   function greedyPick(m, st, gone, ok, rng) {
     if (rng() < 0.1) return ok[Math.floor(rng() * ok.length)];
-    var page = m.missions[m.cur], later = {}, short = 0, best = null, bestSc = -Infinity;
-    m.missions.slice(m.cur + 1).forEach(function (pg) { pg.forEach(function (t) { later[t] = true; }); });
-    page.filter(function (t, j) { return page.indexOf(t) === j; }).forEach(function (t) { short += m.short(t); });
+    var page = [].concat.apply([], m.open().map(function (p) { return m.missions[p]; })), later = {}, short = 0, best = null, bestSc = -Infinity;
+    m.missions.slice(m.cur + 2).forEach(function (pg) { pg.forEach(function (t) { later[t] = true; }); });
+    var focus = m.focus(), fp = m.missions[focus];
+    fp.filter(function (t, j) { return fp.indexOf(t) === j; }).forEach(function (t) { short += m.shortOn(t, focus); });
     ok.forEach(function (s) {
-      var sc = m.short(s.type) ? (short === 1 ? 10 : 5) : later[s.type] ? 1 : -2;
+      var sc = m.shortOn(s.type, focus) ? (short === 1 ? 10 : 5) : m.short(s.type) ? 3 : later[s.type] ? 1 : -2;
       if (sc < 10 && m.used() + 1 >= m.cap) sc -= 20;
       s.blocks.forEach(function (u) {
         if (gone[u] || !st[u].blockers.every(function (b) { return b === s.id || gone[b]; })) return;
@@ -212,7 +206,9 @@
     var taps = 0, fills = [], top = 0, third = ((root.PO.Core && root.PO.Core.BOARD_H) || 440) / 3;
     var end = function (win) {
       var missing = 0;
-      for (var p = m.cur; p < missions.length; p++) missing += p === m.cur ? missions[p].filter(function (t, j, a) { return a.indexOf(t) === j; }).reduce(function (s, t) { return s + m.short(t); }, 0) : missions[p].length;
+      var open = [].concat.apply([], m.open().map(function (p) { return missions[p]; }));
+      missing = open.filter(function (t, j) { return open.indexOf(t) === j; }).reduce(function (s, t) { return s + m.short(t); }, 0);
+      for (var p = m.cur + 2; p < missions.length; p++) missing += missions[p].length;
       return { win: win, junk: junk, taps: taps, fills: fills, page: m.cur, missing: missing, top: top };
     };
     while (!m.done()) {
@@ -224,10 +220,10 @@
       var pick = null;
       if (style === 'greedy') pick = greedyPick(m, st, gone, ok, rng);
       else if (style === 'smart' || (style === 'casual' && rng() >= 0.3)) {
-        var best = -Infinity;
+        var best = -Infinity, focus = m.focus();
         ok.forEach(function (s) {
           var covers = s.blocks.filter(function (q) { return !gone[q] && !st[q].mystery && m.short(st[q].type); }).length;
-          var v = m.short(s.type) ? 100 : 20 + covers * 15 - (m.room() <= 2 && !covers ? 40 : 0);
+          var v = m.shortOn(s.type, focus) ? 100 : m.short(s.type) ? 60 : 20 + covers * 15 - (m.room() <= 2 && !covers ? 40 : 0);
           v += s.blocks.length + rng() * 4;
           if (v > best) { best = v; pick = s; }
         });

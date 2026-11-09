@@ -35,14 +35,20 @@ H.PAGES.forEach(function (p, i) {
 [[0, 0, 3], [2, 0, 2], [3, 0, 1], [6, 6, 3], [8, 6, 2], [9, 6, 1]].forEach(function (c) {
   if (H.starsFor(c[0], c[1]) !== c[2]) { bad++; console.log('starsFor(' + c[0] + ', ' + c[1] + ') should be ' + c[2]); }
 });
-/* A page fills only when the tray holds its whole set, and only the stickers it needs leave the tray. */
-var mm = new H.Model([[1, 1, 2], [3]], 4);
-mm.place({ type: 1 }); mm.place({ type: 3 }); mm.place({ type: 1 });
-if (mm.ready() || mm.short(1) || mm.short(2) !== 1) { bad++; console.log('A page filled before its set was complete'); }
-mm.place({ type: 2 });
+/* Both pages of a spread are open: whichever set the tray completes first fills, and only its stickers leave. */
+var mm = new H.Model([[1, 1, 2], [3], [4], [4]], 4);
+mm.place({ type: 1 }); mm.place({ type: 4 }); mm.place({ type: 1 });
+if (mm.ready() || mm.short(1) || mm.short(2) !== 1 || mm.short(3) !== 1 || mm.short(4)) { bad++; console.log('A page filled before its set was complete, or the next spread counted'); }
+mm.place({ type: 3 });
 var set = mm.ready();
-if (!set || set.length !== 3) { bad++; console.log('A complete set should be ready'); }
-else { mm.fill(set); if (mm.used() !== 1 || !mm.ready()) { bad++; console.log('The next page should take the sticker left in the tray'); } }
+if (!set || set.page !== 1 || set.length !== 1) { bad++; console.log('The right page should fill first'); }
+else {
+  mm.fill(set);
+  if (mm.cur !== 0 || mm.ready()) { bad++; console.log('The spread should stay open until both pages are full'); }
+  mm.place({ type: 2 }); set = mm.ready();
+  if (!set || set.page !== 0) { bad++; console.log('The left page should fill after the right one'); }
+  else { mm.fill(set); if (mm.cur !== 2 || mm.used() !== 1 || !mm.ready()) { bad++; console.log('The next spread should open and take the sticker left in the tray'); } }
+}
 /* A sticker still flying to the tray does not count yet. */
 var mf = new H.Model([[5]], 2); mf.place({ type: 5, landed: false });
 if (mf.ready()) { bad++; console.log('A sticker in flight filled a page'); }

@@ -9,7 +9,7 @@
   I18n.setLang('vi');
 
   /* ---------- save ---------- */
-  var KEY = 'so-sticker-v3';   // v3: one mission per page, filled from the tray; older saves were other rules
+  var KEY = 'so-sticker-v4';   // v4: only the beach story is left; older saves counted other levels
   var save = { unlocked: 1, stars: [] };
   try { var raw = localStorage.getItem(KEY); if (raw) save = Object.assign(save, JSON.parse(raw)); } catch (e) { /* plays without saving */ }
   function persist() { try { localStorage.setItem(KEY, JSON.stringify(save)); } catch (e) { /* plays without saving */ } }
@@ -64,7 +64,7 @@
   function buzz(p) { if (navigator.vibrate && (!navigator.userActivation || navigator.userActivation.hasBeenActive)) { try { navigator.vibrate(p); } catch (e) { /* optional */ } } }
 
   /* ---------- the sticker book ----------
-     Each page of the book is a mission; a spread holds two. The left page opens first, then the right one; when
+     Each page of the book is a mission; a spread holds two, both open at once and filled in any order; when
      both are full the book turns. Slot positions are kept in book units (0..1 of width and height) so any canvas
      can draw them. */
   var lv = null, levelIdx = 0, artCv = $('art'), artX = artCv.getContext('2d');
@@ -73,57 +73,47 @@
   var shown = 0, left = [], right = [], flip = null, booked = 0;
   var bookW = 300, bookH = 180, glowTypes = {};
   function rng(seed) { var s = seed >>> 0; return function () { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
-  var PAGES_X = [{ x0: 0.07, x1: 0.47 }, { x0: 0.53, x1: 0.93 }], PAGE_Y0 = 0.2, PAGE_Y1 = 0.9;
-  /* A story scene fills both pages: the picture spans this area of the book, fitted to its width (3:2 art, so a
-     little of its top and bottom is cut), and its slots sit where the scene data puts them in the picture. */
-  /* SCENE_SCALE: the scene data's sizes were set small; stickers must read clearly on the picture. */
-  var SCENE_X0 = 0.045, SCENE_W = 0.91, SCENE_Y0 = 0.07, SCENE_H = 0.87, BOOK_RATIO = 1 / 0.6, ART_RATIO = 1.5, SCENE_SCALE = 1.45;
-  function sceneSlots(half, seed) {
-    var r = rng(seed);
-    return half.map(function (sl) {
-      return { type: sl[0], u: SCENE_X0 + sl[1] * SCENE_W, v: SCENE_Y0 + SCENE_H / 2 + (sl[2] - 0.5) * SCENE_W * BOOK_RATIO / ART_RATIO, s: sl[3] * SCENE_SCALE, rot: (r() - 0.5) * 0.3, filledAt: -1, reserved: false };
+  var PAGES_X = [{ x0: 0.07, x1: 0.47 }, { x0: 0.53, x1: 0.93 }];
+  /* A chapter with a picture per page (imgL, imgR): each picture covers its page, slots in 0..1 of that page. */
+  var PAGE_RECT = [[0.045, 0.495], [0.505, 0.955]], PAGE_TOP = 0.07, PAGE_H = 0.87;
+  function pageSlots(list, side, seed) {
+    var r = rng(seed), pg = PAGE_RECT[side];
+    return list.map(function (sl) {
+      return { type: sl[0], u: pg[0] + sl[1] * (pg[1] - pg[0]), v: PAGE_TOP + sl[2] * PAGE_H, s: sl[3], rot: (r() - 0.5) * 0.16, filledAt: -1, reserved: false };
     });
   }
-  /* Spread s of a level: its two missions, one per page (on a story level, the two halves of its scene). */
-  function spreadOf(def, missions, s, seed) {
-    var sc = def.scenes && def.scenes[s];
-    if (sc) return { left: sceneSlots(sc.left, seed + s * 31), right: sceneSlots(sc.right, seed + s * 31 + 1) };
-    return { left: buildPage(missions[2 * s] || [], 0, seed + s * 31), right: buildPage(missions[2 * s + 1] || [], 1, seed + s * 31) };
+  /* Spread s of a level: its scene's two pages, one mission each. */
+  function spreadOf(def, s, seed) {
+    var sc = def.scenes[s];
+    return { left: pageSlots(sc.left, 0, seed + s * 31), right: pageSlots(sc.right, 1, seed + s * 31 + 1) };
   }
-  function openSpread(s) { var sp = spreadOf(lv.def, lv.missions, s, lv.cfg.seed); left = sp.left; right = sp.right; shown = s; }
-  /* The page the tray is filling now: the left page for an even mission, the right page for an odd one. */
-  function openPage() { return model.cur % 2 ? right : left; }
+  function openSpread(s) { var sp = spreadOf(lv.def, s, lv.cfg.seed); left = sp.left; right = sp.right; shown = s; }
+  /* The slots of the pages still open (either may fill next); pageList(p): the slots of mission p. */
+  function pageList(p) { return p % 2 ? right : left; }
+  function openPage() { return [].concat.apply([], model.open().map(pageList)); }
   function levelName() { return lv.def.title || I18n.name(Art.ALBUMS[lv.def.album]); }
   /* Scene pictures, decoded once; null until ready (the book draws plain pages meanwhile). */
   var sceneImgs = {};
-  function sceneImage(sc) {
-    if (!sc || !PO.SceneImages || !PO.SceneImages[sc.img]) return null;
-    var im = sceneImgs[sc.img];
+  function picture(name) {
+    if (!name || !PO.SceneImages || !PO.SceneImages[name]) return null;
+    var im = sceneImgs[name];
     if (!im) {
-      im = sceneImgs[sc.img] = new Image();
+      im = sceneImgs[name] = new Image();
       im.onload = function () { if (!lv && !$('home').hidden) showHome(); };
-      im.src = PO.SceneImages[sc.img];
+      im.src = PO.SceneImages[name];
     }
     return im.complete && im.naturalWidth ? im : null;
+  }
+  /* A scene's art for drawBook: { L, R, FL, FR }, a picture per page; null until both pages are decoded. */
+  function sceneImage(sc) {
+    if (!sc) return null;
+    var l = picture(sc.imgL), r = picture(sc.imgR);
+    /* FL, FR: the page's original illustration (fullL, fullR), shown once the page is full. */
+    return l && r ? { L: l, R: r, FL: picture(sc.fullL), FR: picture(sc.fullR) } : null;
   }
   function sceneOf(s) { return lv && lv.def.scenes ? lv.def.scenes[s] : null; }
   /* Opening a scene tells its bit of the story. */
   function tellScene() { var sc = sceneOf(shown); if (sc) toast(sc.title + ': ' + sc.line); }
-  /* Lays out stickers on one page of the book: side 0 is the left page, 1 the right. */
-  function buildPage(types, side, seed) {
-    var r = rng(seed * 7 + 3 + side), pg = PAGES_X[side], m = types.length, out = [];
-    var pw = (pg.x1 - pg.x0) * 5, ph = (PAGE_Y1 - PAGE_Y0) * 3;
-    var cols = Math.max(1, Math.round(Math.sqrt(m * pw / ph))), rows = Math.ceil(m / cols);
-    while (cols * rows < m) cols++;
-    var cw = pw / cols, ch = ph / rows, size = Math.min(cw, ch, 1.15) * 0.82;
-    for (var k = 0; k < m; k++) {
-      var row = Math.floor(k / cols), inRow = Math.min(cols, m - row * cols), col = k % cols;
-      var offset = (cols - inRow) * cw / 2;
-      var px = offset + (col + 0.5) * cw + (r() - 0.5) * cw * 0.18, py = (row + 0.5) * ch + (r() - 0.5) * ch * 0.18;
-      out.push({ type: types[k], u: pg.x0 + px / 5, v: PAGE_Y0 + py / 3, s: size / 3, rot: (r() - 0.5) * 0.5, filledAt: -1, reserved: false });
-    }
-    return out;
-  }
   function sizeBook() {
     var appW = $('app').clientWidth, h = root.innerHeight;
     dpr = Math.min(root.devicePixelRatio || 1, 2);
@@ -137,8 +127,18 @@
   }
   /* Draws a spread into ctx at w x h. pages: { left, right } slot lists (left null: the opening page).
      opts: now, full (every slot filled), title (washi tape on the right page), cover (text on an opening page),
-     active (the open page: 0 left, 1 right), have (copies per type already in the tray), glow, pick,
-     scene (a story picture over both pages), sceneL (another picture for the left half, while the book turns). */
+     active ([left open, right open]), have (copies per type already in the tray), glow, pick,
+     scene (the spread's pictures, from sceneImage), sceneL (the old spread's, for the left half while the book turns). */
+  /* A picture per page covers its page (cropped to fit), like a printed page of the book. */
+  function coverPage(x, pic, side, w, h, alpha) {
+    var px = PAGE_RECT[side][0] * w, pw = (PAGE_RECT[side][1] - PAGE_RECT[side][0]) * w, py = PAGE_TOP * h, ph = PAGE_H * h;
+    var k = Math.max(pw / pic.naturalWidth, ph / pic.naturalHeight), dw = pic.naturalWidth * k, dh = pic.naturalHeight * k;
+    x.save();
+    x.globalAlpha = alpha === undefined ? 1 : alpha;
+    x.beginPath(); x.roundRect(px, py, pw, ph, h * 0.04); x.clip();
+    x.drawImage(pic, px + (pw - dw) / 2, py + (ph - dh) / 2, dw, dh);
+    x.restore();
+  }
   function drawBook(x, w, h, pages, opts) {
     var now = opts.now || 0;
     x.save();
@@ -148,18 +148,12 @@
     x.setLineDash([h * 0.035, h * 0.025]); x.lineWidth = Math.max(1, h * 0.008); x.strokeStyle = 'rgba(255,226,180,.55)';
     x.beginPath(); x.roundRect(h * 0.03, h * 0.03, w - h * 0.06, h - h * 0.06, h * 0.07); x.stroke(); x.setLineDash([]);
     if (opts.scene) {
-      [opts.sceneL || opts.scene, opts.scene].forEach(function (im, i) {
-        var ax = SCENE_X0 * w, aw = SCENE_W * w, ay = SCENE_Y0 * h, ah = SCENE_H * h, dh = aw / ART_RATIO;
-        x.save();
-        x.beginPath(); x.roundRect(ax, ay, aw, ah, h * 0.04); x.clip();
-        x.beginPath(); x.rect(i ? w / 2 : 0, 0, w / 2, h); x.clip();
-        x.drawImage(im, ax, ay + ah / 2 - dh / 2, aw, dh);
-        x.restore();
-      });
+      coverPage(x, (opts.sceneL || opts.scene).L, 0, w, h);
+      coverPage(x, opts.scene.R, 1, w, h);
       /* The fold: a soft shadow down the spine, so the picture still reads as a book. */
       var fg = x.createLinearGradient(w * 0.44, 0, w * 0.56, 0);
       fg.addColorStop(0, 'rgba(60,30,10,0)'); fg.addColorStop(0.5, 'rgba(60,30,10,.28)'); fg.addColorStop(1, 'rgba(60,30,10,0)');
-      x.fillStyle = fg; x.fillRect(w * 0.44, SCENE_Y0 * h, w * 0.12, SCENE_H * h);
+      x.fillStyle = fg; x.fillRect(w * 0.44, PAGE_TOP * h, w * 0.12, PAGE_H * h);
     } else [[0.045, 0.495], [0.505, 0.955]].forEach(function (pg, i) {
       var px = pg[0] * w, pw = (pg[1] - pg[0]) * w, py = 0.07 * h, ph = 0.87 * h;
       var pgG = x.createLinearGradient(i ? px : px + pw, 0, i ? px + pw : px, 0);
@@ -193,8 +187,10 @@
       x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(opts.title, tw / 2, h * 0.058);
       x.restore();
     }
+    /* One count over both open pages, so a tray copy lights a single slot, not one on each page. */
+    var seen = {};
     [pages.left || [], pages.right || []].forEach(function (list, side) {
-      var open = opts.active === side, seen = {};
+      var open = !!(opts.active && opts.active[side]);
       /* The open page wears a gold stitched frame, so the player knows which set the tray is gathering. */
       if (open && list.length) {
         var pg = PAGES_X[side];
@@ -212,7 +208,7 @@
         if (!filled) {
           /* On the open page, a slot whose sticker can be peeled right now glows, pointing at what to take. */
           var hot = open && !covered && opts.glow && opts.glow[sl.type] && !sl.reserved, pick = open && opts.pick && !sl.reserved && !covered;
-          x.globalAlpha = covered ? 0.85 : hot ? 0.45 + 0.18 * Math.sin(now * 6) : opts.active === undefined || open ? 0.24 : 0.14;
+          x.globalAlpha = covered ? 0.85 : hot ? 0.45 + 0.18 * Math.sin(now * 6) : !opts.active || open ? 0.24 : 0.14;
           x.drawImage(sp.front, -box / 2, -box / 2, box, box);
           x.globalAlpha = 1;
           if (!covered) x.setLineDash([Math.max(2, size * 0.08), Math.max(2, size * 0.06)]);
@@ -232,13 +228,20 @@
         }
         x.restore();
       });
+      /* A full page with an original illustration fades into it: the stickers become the painted scene. */
+      var art = side ? opts.scene : opts.sceneL || opts.scene, orig = art && (side ? art.FR : art.FL);
+      if (orig && list.length) {
+        if (list.revealAt === undefined && list.every(function (sl) { return sl.filledAt >= 0 && now >= sl.filledAt + 0.6; })) list.revealAt = now;
+        var a = opts.full ? 1 : list.revealAt === undefined ? 0 : Math.min(1, (now - list.revealAt) / 1.2);
+        if (a > 0) coverPage(x, orig, side, w, h, a);
+      }
     });
     x.restore();
   }
   function missionTitle() {
     var sc = sceneOf(shown);
     if (sc) return (shown + 1) + '/' + lv.def.scenes.length + ' · ' + sc.title;
-    return 'Nhiệm vụ ' + (Math.min(model.cur, lv.missions.length - 1) + 1) + '/' + lv.missions.length;
+    return 'Nhiệm vụ ' + model.got.filter(Boolean).length + '/' + lv.missions.length;
   }
   function renderBook(now) {
     glowTypes = {};
@@ -246,7 +249,7 @@
     if (model && !model.done() && !turning()) {
       if (running) Game.freeStickers().forEach(function (s) { if (model.short(s.type)) glowTypes[s.type] = true; });
       model.box.forEach(function (it) { if (it) have[it.type] = (have[it.type] || 0) + 1; });
-      active = model.cur % 2;
+      active = [!model.got[model.cur], !model.got[model.cur + 1]];
     }
     artX.setTransform(dpr, 0, 0, dpr, 0, 0);
     artX.clearRect(0, 0, bookW, bookH);
@@ -299,19 +302,19 @@
   }
   function endFlip() { flip = null; tellScene(); }
   /* A tray sticker of the set just completed leaves its slot and flies up into the open page. */
-  function flyFromBox(it) {
+  function flyFromBox(it, page) {
     var p = toScreen(boxPos(it.slot));
     delete items[it.id];
-    launchBook(it.type, p.x, p.y);
+    launchBook(it.type, p.x, p.y, page);
     booked++;
   }
   function slotScreen(sl) { var r = artCv.getBoundingClientRect(); return { x: r.left + sl.u * bookW, y: r.top + sl.v * bookH }; }
   function bookPct() { return lv && lv.targets.length ? Math.round(booked / lv.targets.length * 100) : 0; }
   function pageFull(list, now) { return list.every(function (s) { return s.filledAt >= 0 && now >= s.filledAt + 0.4; }); }
   function bookDone(now) { return model.done() && !flip && pageFull(left, now) && pageFull(right, now); }
-  /* A sticker of the completed set flies to a free slot of its type on the open page. */
-  function launchBook(type, sx, sy) {
-    var sl = null, slots = openPage();
+  /* A sticker of the completed set flies to a free slot of its type on the page it fills. */
+  function launchBook(type, sx, sy, page) {
+    var sl = null, slots = pageList(page);
     for (var i = 0; i < slots.length; i++) if (slots[i].type === type && slots[i].filledAt < 0 && !slots[i].reserved) { sl = slots[i]; break; }
     if (!sl) return;
     sl.reserved = true;
@@ -459,10 +462,10 @@
   function land(it) { it.landed = true; it.pop = 1; Snd.stick(); if (it.magnet) Snd.clack(2); }
   function updateBox(dt) {
     Object.keys(items).forEach(function (id) { var it = items[id]; if (it.pop > 0) it.pop = Math.max(0, it.pop - dt * 4); });
-    /* The tray holds the open page's whole set: it flies up together, then the next page opens. */
+    /* The tray holds an open page's whole set: it flies up together into that page. */
     var set = !turning() && model.ready();
     if (!set) return;
-    set.forEach(flyFromBox);
+    set.forEach(function (it) { flyFromBox(it, set.page); });
     model.fill(set);
     Snd.clear(3); buzz(20);
   }
@@ -907,7 +910,7 @@
       c.width = bw * rr; c.height = bh * rr;
       var cx = c.getContext('2d'); cx.setTransform(rr, 0, 0, rr, 0, 0);
       var pb = H.build(i);
-      drawBook(cx, bw, bh, spreadOf(def, pb.missions, 0, pb.cfg.seed), { full: save.stars[i] > 0, scene: def.scenes && sceneImage(def.scenes[0]) });
+      drawBook(cx, bw, bh, spreadOf(def, 0, pb.cfg.seed), { full: save.stars[i] > 0, scene: sceneImage(def.scenes[0]) });
       t.appendChild(c);
       t.appendChild(el('b', '', def.story ? def.title : 'Trang ' + (i + 1)));
       var s = el('span', 'stars'); s.innerHTML = save.stars[i] ? stars(save.stars[i]) : ''; t.appendChild(s);
@@ -934,8 +937,8 @@
       if (model) { renderTakes(dt); renderMagnet(); drawCombo(); checkStuck(dt); hintBoost(now); }
       $('pct').textContent = bookPct() + '%';
       if (running && model && model.done() && !winPending) winPending = { stars: starsNow() };
-      /* A full right page turns the book once its stickers have landed; the level is won when the last page is full. */
-      if (model && !flip && !flights.length && !model.done() && Math.floor(model.cur / 2) > shown && pageFull(right, now)) startFlip(now);
+      /* A full spread turns once its stickers have landed; the level is won when the last page is full. */
+      if (model && !flip && !flights.length && !model.done() && Math.floor(model.cur / 2) > shown && pageFull(left, now) && pageFull(right, now)) startFlip(now);
       if (winPending && !flights.length && bookDone(now)) celebrate(winPending);
     }
     requestAnimationFrame(frame);
