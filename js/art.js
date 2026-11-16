@@ -444,9 +444,13 @@
     s.globalCompositeOperation = 'destination-out';
     s.drawImage(white, 0, 0);
     var dim = silhouette(white, '#1C1830');
-    var r = { front: front, back: back, shadow: shadow, dim: dim, ghost: silhouette(white, '#57607A') };
+    var r = { front: front, back: back, shadow: shadow, dim: dim, ghost: silhouette(white, '#57607A'), art: art };
     cache[key] = r;
     return r;
+  }
+  function designName(id) {
+    var a = ALBUMS[Math.floor(id / 10)], d = a && a.designs[id % 10];
+    return d ? d.vi : '';
   }
   /* Fraction of the sprite box a nominal sticker of size S maps onto. */
   function drawScale(S) { return S / (SPR * ART); }
@@ -465,7 +469,7 @@
   }
 
   PO.Art = {
-    ALBUMS: ALBUMS, SPR: SPR, ART: ART, sprite: sprite, drawScale: drawScale, clearCache: clearCache,
+    ALBUMS: ALBUMS, SPR: SPR, ART: ART, sprite: sprite, designName: designName, drawScale: drawScale, clearCache: clearCache,
     makeCanvas: makeCanvas, paintInto: paintInto
   };
 })(window);

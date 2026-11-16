@@ -221,7 +221,7 @@
       var own = cfg.deal(list, rng);
       list.forEach(function (s, id) {
         s.id = id; s.type = own.types[id]; s.ammo = own.ammo ? own.ammo[id] : 0; s.z = id;
-        s.tape = false; s.mystery = false; s.gold = false; s.lock = 0;
+        s.tape = false; s.mystery = false; s.gold = false; s.lock = 0; s.twin = -1;
       });
       applyMods(list, own.order, cfg, rng);
       return { cfg: cfg, stickers: list, solution: own.order, clean: true };
@@ -237,7 +237,7 @@
     var dealt = assignTypes(list, ids, {}, pool, cfg.peak, cfg.spread, rng);
     list.forEach(function (s, id) {
       s.id = id; s.type = dealt.types[id]; s.z = id;
-      s.tape = false; s.mystery = false; s.gold = false; s.lock = 0;
+      s.tape = false; s.mystery = false; s.gold = false; s.lock = 0; s.twin = -1;
     });
     applyMods(list, dealt.order, cfg, rng);
     return { cfg: cfg, stickers: list, solution: dealt.order, clean: dealt.clean };
@@ -249,7 +249,7 @@
       for (var i = cursor; i < ids.length; i++) if (filter(list[ids[i]])) { var t = ids[i]; ids[i] = ids[cursor]; ids[cursor] = t; cursor++; return list[t]; }
       return null;
     }
-    function plain(s) { return !s.tape && !s.mystery && !s.gold && !s.lock; }
+    function plain(s) { return !s.tape && !s.mystery && !s.gold && !s.lock && s.twin < 0; }
     var count;
     if (m.mystery) {
       count = Math.round(list.length * m.mystery);
@@ -272,6 +272,18 @@
       for (var d = 0; d < m.lock; d++) {
         var ls = next(function (s) { return plain(s) && order.indexOf(s.id) >= 4; });
         if (ls) ls.lock = clamp(3 + Math.floor(rng() * 6), 3, order.indexOf(ls.id));
+      }
+    }
+    if (m.twin) {
+      var pairs = 0;
+      for (var e = 0; e < order.length - 1 && pairs < m.twin; e++) {
+        var s1 = list[order[e]], s2 = list[order[e + 1]];
+        if (s1.twin < 0 && s2.twin < 0 && !s1.tape && !s2.tape && !s1.lock && !s2.lock && s1.blockers.indexOf(s2.id) < 0 && s2.blockers.indexOf(s1.id) < 0) {
+          var dx = s1.x - s2.x, dy = s1.y - s2.y;
+          if (dx * dx + dy * dy < (S * 3.4) * (S * 3.4)) {
+            s1.twin = s2.id; s2.twin = s1.id; pairs++; e++;
+          }
+        }
       }
     }
   }

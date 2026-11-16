@@ -18,12 +18,13 @@
      half-collected at once); bottom: share of the sheet in its first layer (less means deeper stacks); decoys:
      extra triples no slot wants (they just clear the tray); salt: the candidate level-lab picked.
      Ids are album * 10 + design. */
+  var SKETCH = ['beach-1-full', 'beach-2-full', 'beach-3-full', 'beach-4-full'];
   var LEVELS = [
-    { tier: 'teach', missions: [1, 1, 2, 2], kinds: 1, pool: 3, peak: 4, spread: 0.2, bottom: 1, decoys: 0, album: 0, mods: {}, salt: 0 },
-    { tier: 'teach', missions: [2, 2, 3, 3], kinds: 2, pool: 4, peak: 4, spread: 0.3, bottom: 0.7, decoys: 0, album: 1, mods: {}, salt: 1 },
-    { tier: 'practice', missions: [3, 3, 3, 3], kinds: 2, pool: 5, peak: 5, spread: 0.4, bottom: 0.55, decoys: 0, album: 2, mods: {}, salt: 10 },
-    { tier: 'practice', missions: [4, 4, 4, 4], kinds: 3, pool: 6, peak: 5, spread: 0.5, bottom: 0.45, decoys: 1, album: 3, mods: {}, salt: 5 },
-    { tier: 'hard', missions: [5, 5, 5, 5], kinds: 3, pool: 7, peak: 6, spread: 0.7, bottom: 0.35, decoys: 1, album: 4, mods: {}, salt: 21 }
+    { tier: 'teach', pocketCap: 2, missions: [1, 1, 2, 2], kinds: 1, pool: 3, peak: 4, spread: 0.2, bottom: 1, decoys: 0, album: 0, chapter: 'beach', unlocks: [60, 62], sketch: SKETCH, mods: { gold: 3, twin: 1 }, salt: 0 },
+    { tier: 'teach', pocketCap: 2, missions: [2, 2, 3, 3], kinds: 2, pool: 4, peak: 4, spread: 0.3, bottom: 0.7, decoys: 0, album: 1, chapter: 'beach', unlocks: [61, 64], sketch: SKETCH, mods: { tape: 0.14, gold: 4, twin: 2 }, salt: 1 },
+    { tier: 'practice', pocketCap: 3, missions: [3, 3, 3, 3], kinds: 2, pool: 5, peak: 5, spread: 0.4, bottom: 0.55, decoys: 0, album: 2, chapter: 'beach', unlocks: [63, 65], sketch: SKETCH, mods: { mystery: 0.18, tape: 0.15, gold: 4, twin: 2 }, salt: 10 },
+    { tier: 'practice', pocketCap: 3, missions: [4, 4, 4, 4], kinds: 3, pool: 6, peak: 5, spread: 0.5, bottom: 0.45, decoys: 1, album: 3, chapter: 'beach', unlocks: [66, 67], sketch: SKETCH, mods: { mystery: 0.2, tape: 0.18, gold: 5, twin: 2, lock: 2 }, salt: 5 },
+    { tier: 'hard', pocketCap: 2, missions: [5, 5, 5, 5], kinds: 3, pool: 7, peak: 6, spread: 0.7, bottom: 0.35, decoys: 1, album: 4, chapter: 'beach', unlocks: [68, 69], sketch: SKETCH, mods: { mystery: 0.22, tape: 0.2, gold: 6, twin: 3, lock: 3 }, salt: 21 }
   ];
   /* A chapter gives each page its own picture (imgL, imgR; fullL / fullR: the original illustration a full page
      fades into). A slot is [sticker id, x, y, size]: x and y are 0..1 of its page, size a share of the book's
@@ -39,7 +40,7 @@
       left: [[66, 0.58, 0.38, 0.3], [67, 0.25, 0.73, 0.13], [68, 0.13, 0.87, 0.12], [67, 0.75, 0.84, 0.13], [68, 0.87, 0.91, 0.1]],
       right: [[60, 0.26, 0.55, 0.44], [61, 0.77, 0.55, 0.44], [69, 0.51, 0.72, 0.18], [63, 0.35, 0.87, 0.11], [63, 0.72, 0.86, 0.11]] }
   ] };
-  LEVELS.push({ tier: 'practice', story: 'beach', peak: 4, spread: 0.35, bottom: 0.5, decoys: 0, mods: {}, salt: 2 });
+  LEVELS.push({ tier: 'practice', pocketCap: 3, story: 'beach', dragMode: true, peak: 4, spread: 0.35, bottom: 0.5, decoys: 0, mods: { mystery: 0.16, tape: 0.18, gold: 8, twin: 3, lock: 2 }, salt: 2 });
   LEVELS.forEach(function (p) {
     var s = STORIES[p.story];
     if (s) { p.title = s.title; p.album = s.album; p.scenes = s.scenes; }
@@ -96,5 +97,5 @@
     return out;
   }
 
-  PO.Hunt = { PAGES: LEVELS, build: build, place: place, openCredit: openCredit };
+  PO.Hunt = { PAGES: LEVELS, STORIES: STORIES, build: build, place: place, openCredit: openCredit };
 })(typeof window !== 'undefined' ? window : globalThis);

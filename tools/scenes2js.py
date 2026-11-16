@@ -22,9 +22,12 @@ def uri(im, quality):
 
 out = {}
 for path in sorted(glob.glob(os.path.join(ROOT, 'art-gen', 'scenes', '*.png'))):
-    im = Image.open(path).convert('RGB')
-    im = im.resize((WIDTH, round(im.height * WIDTH / im.width)), Image.LANCZOS)
     name = os.path.splitext(os.path.basename(path))[0]
+    # Only story master art is embedded. Legacy per-scene images stay in art-gen for reference but do not ship.
+    if name != 'beach-master':
+        continue
+    im = Image.open(path).convert('RGB')
+    im = im.resize((WIDTH, round(im.height * WIDTH / im.width)), Image.Resampling.LANCZOS)
     out[name], size = uri(im, 78)
     print('%-10s %dx%d  %d KB' % (name, im.width, im.height, size // 1024))
 

@@ -119,6 +119,42 @@
     deny: function () { if (!ensure()) return; var t = ctx.currentTime; tone(170, t, 0.13, 0.2, 'triangle', sfxBus, 120); },
     warn: function () { if (!ensure()) return; var t = ctx.currentTime; tone(420, t, 0.09, 0.13, 'sine'); tone(420, t + 0.13, 0.09, 0.13, 'sine'); },
     power: function () { if (!ensure()) return; var t = ctx.currentTime; tone(330, t, 0.3, 0.14, 'sawtooth', sfxBus, 1320); burst(t, 0.2, 0.2, 5000, 0.6); },
+    zap: function () {
+      if (!ensure()) return;
+      var t = ctx.currentTime;
+      burst(t, 0.28, 0.45, 3800, 1.4, 'bandpass');
+      tone(220, t, 0.24, 0.18, 'sawtooth', sfxBus, 1480);
+      [880, 1174, 1568, 2093].forEach(function (f, i) { tone(f, t + 0.04 + i * 0.045, 0.18, 0.12, 'triangle'); });
+    },
+    magic: function () {
+      if (!ensure()) return;
+      var t = ctx.currentTime;
+      [587.33, 783.99, 987.77, 1174.66, 1567.98, 1975.53].forEach(function (f, i) {
+        tone(f, t + i * 0.042, 0.34, 0.14, 'triangle');
+        tone(f * 2, t + i * 0.042, 0.18, 0.05, 'sine');
+      });
+      burst(t, 0.25, 0.18, 6500, 1.8, 'highpass');
+    },
+    vacuum: function () {
+      if (!ensure()) return;
+      var t = ctx.currentTime;
+      burst(t, 0.48, 0.42, 950, 0.9, 'bandpass');
+      tone(180, t, 0.38, 0.16, 'sine', sfxBus, 860);
+      tone(920, t + 0.32, 0.12, 0.18, 'triangle', sfxBus, 1540);
+    },
+    glue: function () {
+      if (!ensure()) return;
+      var t = ctx.currentTime;
+      tone(310, t, 0.14, 0.18, 'sine', sfxBus, 680);
+      tone(480, t + 0.08, 0.12, 0.2, 'triangle', sfxBus, 1120);
+      burst(t + 0.06, 0.08, 0.32, 2800, 1.5);
+    },
+    scratch: function () {
+      if (!ensure()) return;
+      var t = ctx.currentTime;
+      burst(t, 0.16, 0.35, 4800, 1.2, 'highpass');
+      tone(1046, t + 0.05, 0.18, 0.12, 'triangle', sfxBus, 1568);
+    },
     win: function () {
       if (!ensure()) return;
       var t = ctx.currentTime;

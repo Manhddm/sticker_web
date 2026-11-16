@@ -1,0 +1,11 @@
+{
+  "name": "so-sticker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sổ Sticker — Tile Match + Living Sticker Album",
+  "scripts": {
+    "test": "node tools/test-hunt.js",
+    "build": "node tools/build.js",
+    "build:pages": "node tools/build.js --out _site"
+  }
+}

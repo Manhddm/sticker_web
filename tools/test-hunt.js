@@ -41,5 +41,14 @@ H.PAGES.forEach(function (p, i) {
   var left = Object.keys(credit).filter(function (t) { return credit[t]; });
   if (!full(spread) || spread * 2 + 2 < M.length || left.length) { bad++; console.log('Level ' + (i + 1) + ': book not full at the end (spread ' + spread + ', kept ' + left + ')'); }
 });
+/* Chapter progression: levels 1..5 unlock all 10 beach stickers (60..69) for the level 6 beach story finale. */
+var unlocked = {};
+for (var li = 0; li < 5; li++) {
+  var lp = H.PAGES[li];
+  if (lp.chapter !== 'beach' || !lp.unlocks || lp.unlocks.length !== 2 || !lp.sketch || lp.sketch.length !== 4) { bad++; console.log('Level ' + (li + 1) + ': missing beach chapter metadata'); }
+  (lp.unlocks || []).forEach(function (id) { unlocked[id] = (unlocked[id] || 0) + 1; });
+}
+for (var sid = 60; sid < 70; sid++) if (unlocked[sid] !== 1) { bad++; console.log('Beach sticker ' + sid + ' unlocked ' + (unlocked[sid] || 0) + ' times'); }
+if (!H.STORIES || !H.STORIES.beach || !H.PAGES[5] || !H.PAGES[5].dragMode) { bad++; console.log('Missing STORIES.beach export or dragMode on finale'); }
 if (bad) { console.log(bad + ' check(s) failed'); process.exit(1); }
 console.log('All levels OK');

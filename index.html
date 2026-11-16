@@ -6,6 +6,7 @@
 <!--BUILD:STRIP-START-->
 <!--BUILD:STRIP-END-->
 <title>Sổ Sticker</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23FF5A6E'/%3E%3Cpath d='M32 10l6.6 14.4 15.8 1.8-11.8 10.6 3.3 15.6L32 44.6 18.1 52.4l3.3-15.6L9.6 26.2l15.8-1.8Z' fill='%23FFC62E' stroke='%232A2438' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E">
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -119,8 +120,8 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid var(--gold); out
 .howto .rule b { color: var(--ink); }
 .toast { position: absolute; left: 50%; bottom: 84px; transform: translate(-50%, 8px); z-index: 4; pointer-events: none; max-width: 92%; width: max-content; background: var(--ink); color: #FFF; border-radius: 12px; padding: 7px 12px; font-weight: 700; font-size: 13px; line-height: 1.3; text-align: center; opacity: 0; transition: opacity .15s, transform .15s; }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
-.boosters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.boost { position: relative; min-height: 42px; border-radius: 16px; border: 3px solid #FFF; background: var(--paper-2); box-shadow: 0 0 0 1px rgba(42,36,56,.28), 0 4px 0 rgba(20,16,32,.28); display: flex; align-items: center; justify-content: center; gap: 5px; font-weight: 700; font-size: 12px; white-space: nowrap; color: var(--ink); }
+.boosters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.boost { position: relative; min-height: 42px; border-radius: 15px; border: 2.5px solid #FFF; background: var(--paper-2); box-shadow: 0 0 0 1px rgba(42,36,56,.28), 0 4px 0 rgba(20,16,32,.28); display: flex; align-items: center; justify-content: center; gap: 4px; font-weight: 700; font-size: 11.5px; white-space: nowrap; color: var(--ink); padding: 0 4px; }
 .boost:active { transform: translateY(3px); box-shadow: 0 0 0 1px rgba(42,36,56,.28), 0 1px 0 rgba(20,16,32,.28); }
 .boost .n { position: absolute; top: -8px; right: -5px; min-width: 22px; height: 22px; padding: 0 4px; border-radius: 11px; background: var(--ink); color: #FFF; border: 2px solid #FFF; font-family: var(--font-display); font-weight: 800; font-size: 12px; line-height: 18px; text-align: center; }
 /* A helper that could not act bumps; the helper that would help most wiggles with a glow. */
@@ -177,10 +178,11 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid var(--gold); out
   text-shadow: 0 1px 0 rgba(70,20,0,.4); box-shadow: inset 0 -4px 0 rgba(0,0,0,.12), 0 4px 0 rgba(40,24,10,.35);
 }
 #play .boost:active { box-shadow: inset 0 -2px 0 rgba(0,0,0,.12), 0 1px 0 rgba(40,24,10,.35); }
-#play .boost:nth-child(1) { background: linear-gradient(#FFC766, #FF9426); }
-#play .boost:nth-child(2) { background: linear-gradient(#FFA287, #F2654C); }
-#play .boost:nth-child(3) { background: linear-gradient(#C8A6FF, #8E63E9); }
-#play .boost .ico { background: rgba(255,255,255,.88); border-radius: 8px; padding: 2px; width: 24px; height: 24px; }
+#play .boost:nth-child(1) { background: linear-gradient(135deg, #FF5A6E, #FFB326, #3FC1C9); }
+#play .boost:nth-child(2) { background: linear-gradient(#56CCF2, #2F80ED); }
+#play .boost:nth-child(3) { background: linear-gradient(#FFC766, #FF7A2F); }
+#play .boost:nth-child(4) { background: linear-gradient(#C8A6FF, #8E63E9); }
+#play .boost .ico { background: rgba(255,255,255,.88); border-radius: 7px; padding: 2px; width: 20px; height: 20px; }
 #play .boost .n { background: #E8453C; }
 /* Hard pictures: a red tag on the plaque and the gallery tile, and a banner when they start. */
 #play.hard .hud .mid { background: linear-gradient(#FFB4A8, #F2705C); border-color: #9E2E22; color: #FFF; }
@@ -189,34 +191,159 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid var(--gold); out
 .tile.hard::after { content: 'KHÓ'; position: absolute; top: -8px; right: -6px; background: #E8453C; color: #FFF; font-family: var(--font-display); font-weight: 800; font-size: 11px; padding: 2px 7px; border-radius: 9px; border: 2px solid #FFF; }
 .hard-splash { position: fixed; left: 50%; top: 38%; z-index: 30; transform: translate(-50%, -50%) rotate(-3deg); pointer-events: none; text-align: center; background: linear-gradient(#FF7A64, #E8453C); color: #FFF; border: 4px solid #FFF; border-radius: 20px; padding: 12px 26px; box-shadow: 0 10px 30px rgba(0,0,0,.35); animation: splash 2s ease forwards; }
 /* Praise word: pops over the top of the sticker sheet, then floats up and fades. */
-.praise { position: absolute; left: 50%; top: 22%; z-index: 4; pointer-events: none; white-space: nowrap; font-family: var(--font-display); font-weight: 800; font-size: 34px; line-height: 1; color: #FFD43B; paint-order: stroke fill; -webkit-text-stroke: 7px #7A3FE0; filter: drop-shadow(0 4px 0 rgba(40,20,70,.35)); animation: praise 1.2s cubic-bezier(.2,1.4,.4,1) forwards; }
-@keyframes praise { 0% { transform: translate(-50%, 0) scale(.3) rotate(-8deg); opacity: 0; } 18% { transform: translate(-50%, 0) scale(1.12) rotate(-4deg); opacity: 1; } 30% { transform: translate(-50%, 0) scale(1) rotate(-4deg); } 75% { transform: translate(-50%, -14px) scale(1) rotate(-4deg); opacity: 1; } 100% { transform: translate(-50%, -34px) scale(.92) rotate(-4deg); opacity: 0; } }
+.praise { position: absolute; left: 50%; top: 22%; z-index: 4; pointer-events: none; white-space: nowrap; font-family: var(--font-display); font-weight: 800; font-size: 36px; line-height: 1; color: #FFD43B; paint-order: stroke fill; -webkit-text-stroke: 7px #7A3FE0; filter: drop-shadow(0 4px 0 rgba(40,20,70,.35)) drop-shadow(0 0 14px rgba(255,212,59,.65)); animation: praise 1.2s cubic-bezier(.2,1.4,.4,1) forwards; }
+@keyframes praise { 0% { transform: translate(-50%, 0) scale(.3) rotate(-8deg); opacity: 0; } 18% { transform: translate(-50%, 0) scale(1.18) rotate(-4deg); opacity: 1; } 30% { transform: translate(-50%, 0) scale(1) rotate(-4deg); } 75% { transform: translate(-50%, -14px) scale(1) rotate(-4deg); opacity: 1; } 100% { transform: translate(-50%, -34px) scale(.92) rotate(-4deg); opacity: 0; } }
+.art-card.bump { animation: book-bump .32s cubic-bezier(.2,1.5,.45,1); }
+@keyframes book-bump { 0% { transform: translateY(0) scale(1); } 22% { transform: translateY(5px) scale(.968); } 58% { transform: translateY(-2px) scale(1.028); } 100% { transform: translateY(0) scale(1); } }
+#stage.shake { animation: stage-shake .22s ease-out; }
+@keyframes stage-shake { 0% { transform: translate(0, 0); } 25% { transform: translate(-3px, 2px); } 50% { transform: translate(3px, -2px); } 75% { transform: translate(-2px, 1px); } 100% { transform: translate(0, 0); } }
 .perfect { align-self: center; font-family: var(--font-display); font-weight: 800; font-size: 22px; color: #FFF; background: linear-gradient(#FFB020, #FF7A2F); border-radius: 999px; padding: 4px 18px; transform: rotate(-3deg); box-shadow: 0 3px 0 rgba(0,0,0,.18); }
-@media (prefers-reduced-motion: reduce) { .praise { animation: none; transform: translate(-50%, 0); } }
+@media (prefers-reduced-motion: reduce) { .praise { animation: none; transform: translate(-50%, 0); } .art-card.bump, #stage.shake { animation: none; } }
 .hard-splash b { display: block; font-family: var(--font-display); font-size: 34px; line-height: 1; letter-spacing: 1px; }
 .hard-splash span { display: block; font-size: 13px; font-weight: 700; margin-top: 4px; }
 @keyframes splash { 0% { opacity: 0; transform: translate(-50%, -50%) rotate(-3deg) scale(.4); } 15% { opacity: 1; transform: translate(-50%, -50%) rotate(-3deg) scale(1.08); } 25% { transform: translate(-50%, -50%) rotate(-3deg) scale(1); } 80% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -60%) rotate(-3deg) scale(1); } }
+.cam-flash { position: fixed; inset: 0; z-index: 50; background: #FFF; pointer-events: none; animation: cam-flash .48s ease-out forwards; }
+@keyframes cam-flash { 0% { opacity: .95; } 100% { opacity: 0; } }
+.cam-finder { position: fixed; z-index: 45; pointer-events: none; border: 3px solid rgba(255,255,255,.92); border-radius: 14px; box-shadow: 0 0 0 9999px rgba(10,18,30,.28); transition: transform .26s cubic-bezier(.2,1.5,.5,1); }
+.snap-polaroid { position: fixed; z-index: 48; pointer-events: none; background: #FFFDF8; padding: 8px 8px 24px; border-radius: 8px; box-shadow: 0 18px 40px rgba(10,16,30,.45); transform-origin: center; transition: transform .55s cubic-bezier(.2,1.25,.4,1), opacity .4s ease; }
 /* Sticker book: the book is its own frame, so the wooden card around the picture steps back. */
 #play .art-card { padding: 0; background: none; border: 0; box-shadow: 0 6px 0 rgba(40,24,10,.35); border-radius: 14px; }
 #play .art-card canvas { outline: none; box-shadow: none; border-radius: 0; }
 .tile canvas.mini-book { aspect-ratio: 5 / 3; border-radius: 6px; image-rendering: auto; }
 .card .page-shot { align-self: center; border-radius: 10px; box-shadow: 0 6px 18px rgba(0,0,0,.3); transform: rotate(-1.5deg); transition: transform .35s cubic-bezier(.2,1.6,.5,1), box-shadow .35s; }
 .card .page-shot.developed { transform: rotate(-1.5deg) scale(1.05); box-shadow: 0 0 0 3px var(--gold), 0 8px 24px rgba(0,0,0,.3); }
-/* Short phone screens: slimmer plaques and buttons so the sticker sheet keeps its room. */
+
+/* Chapter Sticker Pack Bar & Mode Switcher */
+.pack-bar {
+  flex: none; background: linear-gradient(#FFFDF7, #F3E5CA); border: 2.5px solid #A8733E; border-radius: 14px;
+  padding: 5px 8px; box-shadow: inset 0 1px 0 rgba(255,255,255,.8), 0 3px 0 rgba(40,24,10,.3);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.pack-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.pack-title { font-family: var(--font-display); font-weight: 800; font-size: 12.5px; color: #4A2C16; display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pack-badge { background: #FFF0C2; border: 1.5px solid #E09F2D; color: #7A4210; font-size: 10.5px; padding: 1px 6px; border-radius: 999px; font-weight: 800; }
+.pack-go {
+  flex: none; background: linear-gradient(#FFE066, #FFA726); border: 2px solid #FFF; border-radius: 999px;
+  padding: 2px 9px; font-family: var(--font-display); font-weight: 800; font-size: 11.5px; color: #4A2C16;
+  box-shadow: 0 2px 0 rgba(40,24,10,.25); transition: transform .08s;
+}
+.pack-go:active { transform: translateY(2px); }
+.pack-slots { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; }
+.pack-slot {
+  position: relative; aspect-ratio: 1; border-radius: 7px; background: rgba(168,115,62,.12);
+  border: 1.5px solid rgba(168,115,62,.26); display: grid; place-items: center; padding: 1px;
+}
+.pack-slot canvas { width: 24px; height: 24px; display: block; }
+.pack-slot.collected { background: #FFFDF2; border-color: #2E9E5B; box-shadow: inset 0 0 0 1px rgba(46,158,91,.2); }
+.pack-slot.collected::after {
+  content: '✓'; position: absolute; right: -2px; bottom: -2px; width: 11px; height: 11px; border-radius: 50%;
+  background: #2E9E5B; color: #FFF; font-size: 8px; font-weight: 800; display: grid; place-items: center; border: 1px solid #FFF;
+}
+.pack-slot.hunting {
+  background: #FFF6CC; border: 1.5px solid #FF9800; box-shadow: 0 0 0 2px rgba(255,198,46,.5);
+  animation: pulseSlot 1.2s infinite ease-in-out;
+}
+.pack-slot.hunting::after {
+  content: '★'; position: absolute; right: -2px; top: -3px; width: 11px; height: 11px; border-radius: 50%;
+  background: #FF9800; color: #FFF; font-size: 8px; font-weight: 800; display: grid; place-items: center; border: 1px solid #FFF;
+}
+@keyframes pulseSlot { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.07); } }
+
+/* Story Finale Mode Toggle & Drag Banner */
+.mode-switch { display: flex; align-items: center; gap: 4px; background: rgba(168,115,62,.16); padding: 2px; border-radius: 999px; }
+.mode-pill {
+  border: 0; border-radius: 999px; padding: 3px 9px; font-family: var(--font-display); font-weight: 800; font-size: 11.5px;
+  background: transparent; color: #6B4423; transition: background .12s, color .12s;
+}
+.mode-pill.on { background: linear-gradient(#FFE066, #FFB326); color: #3E220C; box-shadow: 0 1px 3px rgba(40,24,10,.25); border: 1.5px solid #FFF; }
+.drag-banner {
+  grid-column: 1 / -1; min-height: 42px; border-radius: 16px; border: 2.5px solid #FFF8EA;
+  background: linear-gradient(#FFF9E6, #F5E2B8); color: #4A2C16; padding: 5px 10px;
+  box-shadow: 0 3px 0 rgba(40,24,10,.3); display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 12px; font-weight: 700; line-height: 1.25;
+}
+.drag-banner b { font-family: var(--font-display); font-size: 13.5px; color: #2E7D32; display: block; }
+
+/* Dev / Bot Auto-Play Controls */
+#play .hud .btn.bot-btn { font-size: 18px; position: relative; }
+#play .hud .btn.bot-btn.on {
+  background: linear-gradient(#A8FF78, #2E9E5B); border-color: #FFF; color: #FFF;
+  box-shadow: 0 0 0 3px rgba(255,198,46,.65), 0 3px 0 rgba(20,60,30,.4);
+  animation: pulseSlot 1s infinite ease-in-out;
+}
+.dev-bar {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 5px;
+  background: rgba(20, 36, 56, 0.86); border: 1.5px solid rgba(255, 255, 255, 0.28);
+  border-radius: 12px; padding: 3px 7px; color: #FFF; font-size: 11.5px; font-weight: 700;
+}
+.dev-bar .dev-lbl { font-family: var(--font-display); font-weight: 800; color: #FFD54A; font-size: 12px; display: flex; align-items: center; gap: 4px; }
+.dev-bar .dev-acts { display: flex; align-items: center; gap: 4px; }
+.dev-pill {
+  border: 1.5px solid rgba(255,255,255,.45); border-radius: 999px; padding: 2px 8px;
+  background: rgba(255,255,255,.14); color: #FFF; font-family: var(--font-display); font-weight: 800; font-size: 11px;
+}
+.dev-pill.on { background: #2E9E5B; border-color: #FFF; color: #FFF; }
+.dev-pill.warn { background: linear-gradient(#FFB020, #FF7A2F); border-color: #FFF; }
+
+/* Win Modal Sticker Unlock Showcase */
+.unlock-box {
+  background: linear-gradient(#FFF9E6, #F7E8C4); border: 2px solid #E09F2D; border-radius: 14px;
+  padding: 8px 10px; display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+.unlock-box b { font-family: var(--font-display); font-size: 14px; color: #5A3418; }
+.unlock-list { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.unlock-item { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11.5px; font-weight: 700; color: #4A2C16; }
+.unlock-item canvas { border-radius: 10px; background: #FFF; border: 2px solid #FFC62E; box-shadow: 0 2px 6px rgba(0,0,0,.12); }
+
+#play .hud .btn.bot-btn { display: inline-flex; font-size: 18px; position: relative; }
+body.dev #play .hud .btn.bot-btn { display: inline-flex; }
+#play .hud .btn.bot-btn.on {
+  background: linear-gradient(#A8FF78, #2E9E5B); border-color: #FFF; color: #FFF;
+  box-shadow: 0 0 0 3px rgba(255,198,46,.65), 0 3px 0 rgba(20,60,30,.4);
+}
+
 @media (max-height: 720px) {
-  .screen { gap: 5px; padding-block: 6px; }
-  #play .hud .btn.sq { width: 40px; min-height: 40px; }
-  #play .pct { width: 42px; height: 42px; font-size: 14px; }
+  .screen { gap: 4px; padding-block: 5px; }
+  #play .hud .btn.sq { width: 38px; min-height: 38px; }
+  #play .pct { width: 40px; height: 40px; font-size: 13px; }
   #play .hud .mid { padding: 2px 8px; }
-  #play .hud .mid b { font-size: 15px; }
+  #play .hud .mid b { font-size: 14px; }
   #play .hud .mid span { font-size: 10px; }
   #play .hud-stars { padding: 4px 4px; }
-  #play .art-card { padding: 8px; border-radius: 18px; }
-  #play .art-card canvas { outline-offset: 4px; box-shadow: 0 0 0 3px #FFF8EA; }
-  #play .boost { min-height: 38px; font-size: 13px; }
-  #play .boost .ico { width: 20px; height: 20px; }
+  #play .art-card { padding: 0; border-radius: 12px; }
+  #play .boost { min-height: 36px; font-size: 12px; }
+  #play .boost .ico { width: 18px; height: 18px; }
+  .pack-bar { padding: 3px 6px; gap: 2px; }
+  .pack-slot canvas { width: 20px; height: 20px; }
 }
-@media (prefers-reduced-motion: reduce) { .card, .big-stars .star { animation: none; } }
+.card.pocket-tut { max-width: 348px; }
+.tut-badge {
+  background: linear-gradient(90deg, #E11D48, #F59E0B);
+  color: #FFF; font-family: var(--font-display); font-weight: 800; font-size: 12px;
+  padding: 4px 12px; border-radius: 999px; border: 2px solid #2A2438;
+  box-shadow: 0 2px 0 #2A2438; text-align: center;
+}
+.tut-viz {
+  display: flex; justify-content: center; align-items: center;
+  margin: 2px 0; border-radius: 14px; overflow: hidden;
+}
+#play .art-card.bump { animation: book-bump .32s cubic-bezier(.2,1.5,.45,1); }
+@keyframes book-bump {
+  0% { transform: translateY(0) scale(1); }
+  22% { transform: translateY(5px) scale(.968); }
+  58% { transform: translateY(-2px) scale(1.028); }
+  100% { transform: translateY(0) scale(1); }
+}
+#stage.shake { animation: stage-shake .22s ease-out; }
+@keyframes stage-shake {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(-3px, 2px); }
+  50% { transform: translate(3px, -2px); }
+  75% { transform: translate(-2px, -1px); }
+}
+.cam-flash { position: fixed; inset: 0; pointer-events: none; z-index: 44; background: #FFFDF5; opacity: 0; animation: cam-flash .52s ease-out forwards; }
+@keyframes cam-flash { 0% { opacity: 0; } 12% { opacity: .92; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .card, .big-stars .star, #play .art-card.bump, #stage.shake, .cam-flash { animation: none; } }
 </style>
 </head>
 <body>
@@ -228,7 +355,17 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid var(--gold); out
       <div class="mid"><span id="lvNum"></span><b id="lvName"></b></div>
       <div class="hud-stars" id="hudStars"></div>
       <div class="pct" id="pct">0%</div>
+      <button class="btn sq bot-btn" id="botBtn" type="button" aria-label="Bot tự chơi" title="Bot tự chơi (dev)">🤖</button>
       <button class="btn sq help" id="helpBtn" type="button" aria-label="Cách chơi">?</button>
+    </div>
+    <div class="dev-bar">
+      <span class="dev-lbl">⚡ DEMO PITCH:</span>
+      <div class="dev-acts">
+        <button class="dev-pill warn" id="demoPinchBtn" type="button">⚠️ Khay 6/7</button>
+        <button class="dev-pill on" id="demoComboBtn" type="button">💥 Nổ Combo</button>
+        <button class="dev-pill" id="demoSlotBtn" type="button">🔖 Kẹp Trang Sau</button>
+        <button class="dev-pill warn" id="demoTutBtn" type="button">📖 Luật Kẹp</button>
+      </div>
     </div>
     <div class="art-card">
       <canvas id="art" aria-label="Cuốn sổ sticker đang dán"></canvas>
@@ -244,14 +381,14 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid var(--gold); out
 <canvas id="fly"></canvas>
 <canvas id="fx"></canvas>
 <!--BUILD:SCRIPTS-START-->
-<script src="js/core.js"></script>
-<script src="js/art.js"></script>
-<script src="js/audio.js"></script>
-<script src="js/i18n.js"></script>
-<script src="js/game.js"></script>
-<script src="js/hunt.js"></script>
-<script src="js/scene-images.js"></script>
-<script src="js/book.js"></script>
+<script src="js/core.js?v=9"></script>
+<script src="js/art.js?v=9"></script>
+<script src="js/audio.js?v=9"></script>
+<script src="js/i18n.js?v=9"></script>
+<script src="js/game.js?v=9"></script>
+<script src="js/hunt.js?v=9"></script>
+<script src="js/scene-images.js?v=9"></script>
+<script src="js/book.js?v=9"></script>
 <!--BUILD:SCRIPTS-END-->
 </body>
 </html>

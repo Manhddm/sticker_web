@@ -14,12 +14,13 @@
   var tmpB = Art.makeCanvas(Art.SPR), tb = tmpB.getContext('2d');
   var W = 320, H = 480, dpr = 1, k = 1, ox = 0, oy = 0, slot = 44, trayGap = 5, trayY = 0;
   var level = null, stickers = [], tray = [], particles = [], floats = [], ripped = [];
+  var shockwaves = [], lightnings = [], vortex = null, screenShake = 0, fever = false;
   var state = 'idle', cap = Core.BASE_CAP, album = 0, raf = 0, last = 0, merges = 0;
   /* Helper animations: the sheet ignores taps until `hold` (clock time); `whirl` is the shuffle in progress. */
   var hold = 0, whirl = null, lastFlick = 0;
   var drag = null, staticDirty = true, peeled = 0, peakReached = 0, triplesDone = 0;
   var combo = 0, lastClear = -99, clock = 0, history = [], usedContinue = false, usedBoosters = 0;
-  var goldTaken = 0, comboBonus = 0, dangerOn = false, guide = null, idle = 0, kbSel = -1, ending = false;
+  var goldTaken = 0, comboBonus = 0, dangerOn = false, guide = null, idle = 0, kbSel = -1, ending = false, blockedNotified = {};
   var paperR = null, picCv = null, picKey = '', picWin = 0, maskCv = document.createElement('canvas'), hunt = [];
   var settings = { tapPeel: true, haptics: true, idleHint: true };
   var reduced = root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -74,11 +75,28 @@
       if (!onSheet(s)) return;
       var blocked = s.blockers.some(function (b) { return onSheet(stickers[b]); });
       if (blocked !== s.blocked) { s.blocked = blocked; staticDirty = true; }
-      if (!blocked && s.mystery && !s.revealed) { s.revealed = true; s.pop = 1; staticDirty = true; }
+      if (!blocked && s.mystery && !s.revealed) {
+        s.revealed = true; s.pop = 1; staticDirty = true;
+        if (clock > 0.1) {
+          var mp = screenOf(s);
+          Snd.scratch && Snd.scratch();
+          burst(mp.x, mp.y, 16, '#E2E8F0');
+          shockwaves.push({ x: mp.x, y: mp.y, r0: 8, r1: D * k * 0.72, t: 0, dur: 0.35, c: '#FFF', w: 4 });
+        }
+      }
       /* Tape holds a sticker down until the page reports enough finished trays (Game.merge). */
       if (s.tape && s.tape <= merges && s.state === 'board') ripTape(s, 0.5, -0.8);
       var locked = s.lock > peeled || !!s.tape;
-      if (locked !== s.locked) { s.locked = locked; staticDirty = true; if (!locked) s.pop = 1; }
+      if (locked !== s.locked) {
+        s.locked = locked; staticDirty = true;
+        if (!locked) {
+          s.pop = 1;
+          if (clock > 0.1) {
+            var lp = screenOf(s);
+            shockwaves.push({ x: lp.x, y: lp.y, r0: 6, r1: D * k * 0.68, t: 0, dur: 0.32, c: '#FFD531', w: 4 });
+          }
+        }
+      }
     });
   }
   function logicalTray() { return tray.filter(function (s) { return !s.merge; }).length; }
@@ -98,7 +116,7 @@
     stickers = level.stickers.map(function (s) {
       return {
         id: s.id, type: s.type, ammo: s.ammo || 0, x: s.x, y: s.y, rot: s.rot, z: s.z, blockers: s.blockers, blocks: s.blocks,
-        tape: s.tape, mystery: s.mystery, gold: s.gold, lock: s.lock,
+        tape: s.tape, mystery: s.mystery, gold: s.gold, lock: s.lock, twin: s.twin !== undefined ? s.twin : -1,
         state: 'board', blocked: false, locked: false, revealed: false, A: null, F: null, peel: 0,
         shake: 0, pop: 0, px: 0, py: 0, scale: 1, r: s.rot, spawn: 0
       };
@@ -107,9 +125,10 @@
     var seen = {};
     stickers.forEach(function (s) { if (!seen[s.type]) { seen[s.type] = 1; spriteOf(s.type); } });
     tray = []; particles = []; floats = []; ripped = []; history = [];
+    shockwaves = []; lightnings = []; vortex = null; screenShake = 0; fever = false;
     cap = Core.BASE_CAP; drag = null; peeled = 0; peakReached = 0; triplesDone = 0; combo = 0; lastClear = -99;
     merges = 0; hold = 0; whirl = null; clock = 0; usedContinue = false; usedBoosters = 0; goldTaken = 0; comboBonus = 0; dangerOn = false; guide = null;
-    idle = 0; kbSel = -1; ending = false; state = 'play'; picWin = 0; picKey = '';
+    idle = 0; kbSel = -1; ending = false; blockedNotified = {}; state = 'play'; picWin = 0; picKey = '';
     layout();
     /* Stickers drop onto the sheet from the bottom layer up. */
     stickers.forEach(function (s, i) { s.spawn = reduced ? 1 : -i * 0.016; });
@@ -214,7 +233,8 @@
       return;
     }
     /* Two peels can start together. The later one springs back if the tray filled meanwhile. */
-    var pairReady = tray.filter(function (s) { return s.type === st.type && !s.merge; }).length >= 2;
+    var canM = !cb.canMerge || cb.canMerge(st.type);
+    var pairReady = canM && tray.filter(function (s) { return s.type === st.type && !s.merge; }).length >= 2;
     if (logicalTray() >= cap && !pairReady) { st.auto = false; st.spring = true; trayBump(); return; }
     st.state = 'out';
     st.peeling = false; st.auto = false;
@@ -224,20 +244,54 @@
     var at = -1;
     for (var i = 0; i < tray.length; i++) if (tray[i].type === st.type) at = i;
     if (at >= 0) tray.splice(at + 1, 0, st); else tray.push(st);
-    st.arrived = false; st.merge = false;
+    st.arrived = false; st.merge = false; st.mergeBlocked = false;
     var count = logicalTray();
     peakReached = Math.max(peakReached, count);
     var same = tray.filter(function (s) { return s.type === st.type && !s.merge; });
-    if (same.length >= 3) same.slice(0, 3).forEach(function (s) { s.merge = true; });
+    if (same.length >= 3 && canM) same.slice(0, 3).forEach(function (s) { s.merge = true; });
     if (st.gold) { goldTaken++; }
     if (st.mystery) st.revealed = true;
     Snd.detach();
     buzz(10);
+    var sp0 = screenOf(st);
+    shockwaves.push({ x: sp0.x, y: sp0.y, r0: 8, r1: D * k * 0.65, t: 0, dur: 0.26, c: st.gold ? '#FFD531' : 'rgba(255,255,255,0.85)', w: 3.5 });
+    /* Sticky Glue Twin: if this sticker is linked by elastic glue to a twin on the sheet, yank the twin along! */
+    if (st.twin >= 0 && !st._twinPulled) {
+      var tw = stickers[st.twin];
+      st.twin = -1;
+      if (tw && tw.state === 'board' && !tw.peeling) {
+        tw.twin = -1;
+        var twPairReady = tray.filter(function (s) { return s.type === tw.type && !s.merge; }).length >= 2;
+        if (logicalTray() < cap || twPairReady) {
+          var tp = screenOf(tw);
+          addLightning(sp0.x, sp0.y, tp.x, tp.y, '#3FC1C9', 0.35);
+          Snd.glue && Snd.glue();
+          floats.push({ x: (sp0.x + tp.x) / 2, y: Math.min(sp0.y, tp.y) - 18, t: 0, text: 'KEO ĐÔI! +2', big: true });
+          tw._twinPulled = true;
+          tw.tape = false; tw.lock = 0; tw.revealed = true;
+          setTimeout(function () {
+            if (tw.state === 'board' && !tw.peeling && state === 'play') {
+              autoPeel(tw, 0, 0);
+            }
+          }, reduced ? 0 : 75);
+        }
+      }
+    }
     emit('peel', { id: st.id, type: st.type });
     refresh();
     updateDanger();
     hud();
     staticDirty = true;
+  }
+  function addLightning(x0, y0, x1, y1, color, dur) {
+    var pts = [[x0, y0]], steps = 7, dx = x1 - x0, dy = y1 - y0, len = Math.sqrt(dx * dx + dy * dy) || 1;
+    var nx = -dy / len, ny = dx / len;
+    for (var i = 1; i < steps; i++) {
+      var p = i / steps, jitter = (Math.random() - 0.5) * Math.min(34, len * 0.22);
+      pts.push([x0 + dx * p + nx * jitter, y0 + dy * p + ny * jitter]);
+    }
+    pts.push([x1, y1]);
+    lightnings.push({ pts: pts, c: color || '#FFD531', t: 0, dur: dur || 0.38 });
   }
   function updateDanger() {
     var on = logicalTray() >= cap - 1;
@@ -277,6 +331,52 @@
       }
       return false;
     },
+    /* Rainbow Wand (Đũa Cầu Vồng): completes a partial set in the tray or zaps a rainbow triple off the board! */
+    wand: function () {
+      var counts = {}, board = stickers.filter(function (s) { return s.state === 'board' && !s.peeling; });
+      if (!board.length) return false;
+      tray.forEach(function (s) { if (!s.merge) counts[s.type] = (counts[s.type] || 0) + 1; });
+      var avail = {};
+      board.forEach(function (s) { avail[s.type] = (avail[s.type] || 0) + 1; });
+      var bestType = null, bestScore = -1;
+      Object.keys(avail).forEach(function (t) {
+        if (cb.canMerge && !cb.canMerge(+t)) return;
+        var have = counts[t] || 0, need = 3 - have;
+        if (need > 0 && avail[t] >= need && have * 25 + avail[t] > bestScore) { bestScore = have * 25 + avail[t]; bestType = +t; }
+      });
+      if (bestType === null) return false;
+      var need = 3 - (counts[bestType] || 0);
+      var picks = board.filter(function (s) { return s.type === bestType; }).sort(function (a, b) { return (a.blocked - b.blocked) || (b.z - a.z); }).slice(0, need);
+      var wandX = W * 0.5, wandY = H - 10;
+      var rainbowCols = ['#FF5A6E', '#FFD531', '#3FC1C9', '#C864FF', '#7BD45E'];
+      shockwaves.push({ x: W / 2, y: paperR.y + paperR.h * 0.45, r0: 12, r1: W * 0.62, t: 0, dur: 0.52, c: '#C864FF', w: 7 });
+      picks.forEach(function (s, i) {
+        s.tape = false; s.lock = 0; s.revealed = true; s.twin = -1; s.A = null; s.F = null;
+        s.gold = true;
+        var p = screenOf(s);
+        addLightning(wandX, wandY, p.x, p.y, rainbowCols[i % rainbowCols.length], 0.48);
+        addLightning(wandX, wandY, p.x, p.y, '#FFFFFF', 0.32);
+        shockwaves.push({ x: p.x, y: p.y, r0: 6, r1: D * k * 0.9, t: 0, dur: 0.42, c: rainbowCols[i % rainbowCols.length], w: 5 });
+        burst(p.x, p.y, 18, rainbowCols[i % rainbowCols.length]);
+        s.state = 'out-magnet';
+        peeled++;
+        var at = -1;
+        for (var q = 0; q < tray.length; q++) if (tray[q].type === s.type) at = q;
+        if (at >= 0) tray.splice(at + 1, 0, s); else tray.push(s);
+        s.arrived = false;
+        s.merge = true;
+        startFly(s, p.x, p.y);
+        s.flyT = -i * 0.05;
+        s.fr = TAU * 2;
+      });
+      tray.forEach(function (s) { if (s.type === bestType) { s.merge = true; s.gold = true; } });
+      floats.push({ x: W / 2, y: paperR.y + paperR.h * 0.38, t: 0, text: '🪄 ĐŨA CẦU VỒNG!', big: true });
+      screenShake = 0.75;
+      Snd.magic ? Snd.magic() : Snd.power();
+      buzz([20, 30, 25]);
+      refresh(); updateDanger(); hud();
+      return true;
+    },
     magnet: function () {
       var counts = {}, board = stickers.filter(function (s) { return s.state === 'board' && !s.peeling; });
       if (!board.length) return false;
@@ -285,18 +385,25 @@
       board.forEach(function (s) { avail[s.type] = (avail[s.type] || 0) + 1; });
       var bestType = null, bestScore = -1;
       Object.keys(avail).forEach(function (t) {
+        if (cb.canMerge && !cb.canMerge(+t)) return;
         var have = counts[t] || 0, need = 3 - have;
-        if (avail[t] >= need && have * 10 + avail[t] > bestScore) { bestScore = have * 10 + avail[t]; bestType = +t; }
+        if (need > 0 && avail[t] >= need && have * 10 + avail[t] > bestScore) { bestScore = have * 10 + avail[t]; bestType = +t; }
       });
       if (bestType === null) return false;
       var need = 3 - (counts[bestType] || 0);
       /* Pull the easiest stickers first: uncovered ones, then the highest in the stack. */
       var picks = board.filter(function (s) { return s.type === bestType; }).sort(function (a, b) { return (a.blocked - b.blocked) || (b.z - a.z); }).slice(0, need);
+      var coreX = W / 2, coreY = trayY + slot / 2 + 8;
+      shockwaves.push({ x: coreX, y: coreY, r0: 10, r1: W * 0.55, t: 0, dur: 0.45, c: '#3FC1C9', w: 6 });
       /* Taking the triple whole means the magnet still works on a nearly full tray. */
       picks.forEach(function (s, i) {
-        s.tape = false; s.lock = 0; s.revealed = true; s.A = null; s.F = null;
+        s.tape = false; s.lock = 0; s.revealed = true; s.twin = -1; s.A = null; s.F = null;
         s.state = 'board';
         var p = screenOf(s);
+        addLightning(coreX, coreY, p.x, p.y, '#3FC1C9', 0.44);
+        addLightning(coreX, coreY, p.x, p.y, '#FFD531', 0.3);
+        shockwaves.push({ x: p.x, y: p.y, r0: 6, r1: D * k * 0.85, t: 0, dur: 0.38, c: '#3FC1C9', w: 4.5 });
+        burst(p.x, p.y, 14, '#3FC1C9');
         s.state = 'out-magnet';
         peeled++;
         var at = -1;
@@ -308,40 +415,88 @@
         s.flyT = -i * 0.06;
       });
       tray.forEach(function (s) { if (s.type === bestType) s.merge = true; });
-      Snd.power();
+      floats.push({ x: W / 2, y: paperR.y + paperR.h * 0.42, t: 0, text: '⚡ NAM CHÂM SÉT!', big: true });
+      screenShake = 0.85;
+      Snd.zap ? Snd.zap() : Snd.power();
+      buzz([25, 35, 25]);
+      refresh(); updateDanger(); hud();
+      return true;
+    },
+    /* Paper Vacuum & Magic Peel (Bão Hút Giấy): clears single stickers from the tray AND rips tape/locks on the sheet! */
+    vacuum: function () {
+      var didWork = false;
+      var cx = W / 2, cy = paperR.y + paperR.h * 0.45;
+      /* 1. Return up to 3 unmatched stickers from the tray back to the sheet to rescue a crowded tray! */
+      var removable = tray.filter(function (s) { return s.state === 'tray' && !s.merge; });
+      if (removable.length > 0) {
+        var toReturn = removable.slice(-3);
+        toReturn.forEach(function (s) {
+          var hi = history.indexOf(s.id);
+          if (hi >= 0) history.splice(hi, 1);
+          tray.splice(tray.indexOf(s), 1);
+          peeled = Math.max(0, peeled - 1);
+          s.state = 'return'; s.flyT = 0; s.fx = s.px; s.fy = s.py; s.fs = s.scale;
+          s.A = null; s.F = null; s.peel = 0; s.r = s.rot;
+          addLightning(s.px, s.py, cx, cy, '#FFD531', 0.36);
+          didWork = true;
+        });
+      }
+      /* 2. Magic Peel: rip off up to 3 tapes, unlock locks, and reveal mysteries on the board! */
+      var tapedOrLocked = stickers.filter(function (s) { return onSheet(s) && (s.tape || s.lock > peeled || (s.mystery && !s.revealed)); });
+      tapedOrLocked.slice(0, 4).forEach(function (s) {
+        var p = screenOf(s);
+        if (s.tape) ripTape(s, (Math.random() - 0.5) * 1.4, -1);
+        if (s.lock > peeled) s.lock = 0;
+        if (s.mystery && !s.revealed) s.revealed = true;
+        s.pop = 1;
+        shockwaves.push({ x: p.x, y: p.y, r0: 6, r1: D * k * 0.8, t: 0, dur: 0.4, c: '#FFD531', w: 4 });
+        burst(p.x, p.y, 12, '#FFD531');
+        didWork = true;
+      });
+      if (!didWork && cap < Core.MAX_CAP) {
+        addSlots(1);
+        didWork = true;
+      }
+      if (!didWork) return false;
+      vortex = { x: cx, y: cy, t: 0, dur: 0.75 };
+      shockwaves.push({ x: cx, y: cy, r0: 15, r1: W * 0.58, t: 0, dur: 0.5, c: '#FF9A2F', w: 6 });
+      floats.push({ x: cx, y: cy - 20, t: 0, text: '🌪️ BÃO GIẤY GIẢI CỨU!', big: true });
+      screenShake = 0.65;
+      Snd.vacuum ? Snd.vacuum() : Snd.power();
+      buzz([18, 30, 18]);
+      staticDirty = true;
       refresh(); updateDanger(); hud();
       return true;
     },
     shuffle: function () {
+      var on = stickers.filter(function (s) { return s.state === 'board' && !s.peeling; });
+      if (on.length < 2) return false;
       if (beltMode()) {
-        /* Swap whole stickers (design and number) among those still on the sheet, so every count stays right. */
-        var on = stickers.filter(function (s) { return s.state === 'board' && !s.peeling; });
-        if (on.length < 2) return false;
         var packs = on.map(function (s) { return [s.type, s.ammo]; }), seed = Math.floor(clock * 1000) + peeled * 31 + 5;
         for (var q = packs.length - 1; q > 0; q--) { seed = (seed * 9301 + 49297) % 233280; var j = Math.floor(seed / 233280 * (q + 1)), tmp = packs[q]; packs[q] = packs[j]; packs[j] = tmp; }
-        if (reduced) { on.forEach(function (s, i) { s.nextType = packs[i][0]; s.nextAmmo = packs[i][1]; s.swapT = 0.001; }); staticDirty = true; return true; }
-        /* A whirlwind: the stickers lift, circle the middle of the sheet once (designs swap while they spin),
-           then drop back into their own places, bottom layer first. */
         on.forEach(function (s, i) { s.nextType = packs[i][0]; s.nextAmmo = packs[i][1]; s.landed = false; });
-        var byZ = on.slice().sort(function (a, b) { return a.z - b.z; });
-        byZ.forEach(function (s, i) { s.dropAt = 0.68 + 0.27 * i / Math.max(1, byZ.length - 1); });
-        whirl = { t: 0, dur: 1.15, list: on };
-        hold = clock + 1.2;
-        Snd.wind(1.1);
+      } else {
+        var ids = on.map(function (s) { return s.id; });
+        var trayTypes = tray.filter(function (s) { return !s.merge; }).map(function (s) { return s.type; });
+        var types = Core.redeal(stickers, ids, trayTypes, cap, Math.floor(clock * 1000) + peeled * 31 + 5);
+        on.forEach(function (s) {
+          if (types[s.id] !== undefined) s.nextType = types[s.id];
+          s.landed = false;
+        });
+      }
+      if (reduced) {
+        on.forEach(function (s) { if (s.nextType !== undefined) { s.type = s.nextType; s.nextType = undefined; } });
         staticDirty = true;
         return true;
       }
-      var ids = stickers.filter(function (s) { return s.state === 'board' && !s.peeling; }).map(function (s) { return s.id; });
-      if (ids.length < 2) return false;
-      var trayTypes = tray.filter(function (s) { return !s.merge; }).map(function (s) { return s.type; });
-      var types = Core.redeal(stickers, ids, trayTypes, cap, Math.floor(clock * 1000) + peeled * 31 + 5);
-      ids.forEach(function (id, i) {
-        var s = stickers[id];
-        if (types[id] === undefined) return;
-        s.nextType = types[id];
-        s.swapT = reduced ? 0.001 : -i * 0.006;
-      });
-      Snd.power();
+      var byZ = on.slice().sort(function (a, b) { return a.z - b.z; });
+      byZ.forEach(function (s, i) { s.dropAt = 0.62 + 0.3 * i / Math.max(1, byZ.length - 1); });
+      whirl = { t: 0, dur: 1.05, list: on };
+      hold = clock + 1.1;
+      var cx = W / 2, cy = paperR.y + paperR.h / 2;
+      shockwaves.push({ x: cx, y: cy, r0: 14, r1: W * 0.55, t: 0, dur: 0.55, c: '#8E63E9', w: 6 });
+      floats.push({ x: cx, y: cy - 20, t: 0, text: '🔀 LẬT TỜ BÃO XOÁY!', big: true });
+      Snd.wind(1.05);
       staticDirty = true;
       return true;
     },
@@ -430,6 +585,22 @@
       r.x += r.vx * dt; r.y += r.vy * dt; r.vy += 900 * dt; r.r += r.vr * dt; r.life -= dt * 1.5;
       if (r.life <= 0) ripped.splice(t, 1);
     }
+    for (var sw = shockwaves.length - 1; sw >= 0; sw--) {
+      shockwaves[sw].t += dt;
+      if (shockwaves[sw].t >= shockwaves[sw].dur) shockwaves.splice(sw, 1);
+    }
+    for (var lg = lightnings.length - 1; lg >= 0; lg--) {
+      lightnings[lg].t += dt;
+      if (lightnings[lg].t >= lightnings[lg].dur) lightnings.splice(lg, 1);
+    }
+    if (vortex) {
+      vortex.t += dt;
+      if (vortex.t >= vortex.dur) vortex = null;
+    }
+    if (screenShake > 0) screenShake = Math.max(0, screenShake - dt * 2.8);
+    var wasFever = fever;
+    fever = combo >= 2 && (clock - lastClear < 6.5);
+    if (fever !== wasFever) staticDirty = true;
     if (hunt.length) updateHunt(dt);
     if (state === 'play') checkEnd();
   }
@@ -533,19 +704,57 @@
     }
   }
   function resolveTriples(dt) {
+    /* First, check if any arrived 3-of-a-kind in the tray is blocked by a full Bookmark Pocket (or newly unblocked after page flip). */
+    var byType = {};
+    tray.forEach(function (s) {
+      if (s.state === 'tray' && s.arrived) (byType[s.type] = byType[s.type] || []).push(s);
+    });
+    Object.keys(byType).forEach(function (t) {
+      var list = byType[t];
+      var canM = !cb.canMerge || cb.canMerge(+t);
+      if (list.length >= 3) {
+        if (canM) {
+          list.slice(0, 3).forEach(function (s) { s.merge = true; s.mergeBlocked = false; });
+          delete blockedNotified[t];
+        } else {
+          list.forEach(function (s) {
+            s.merge = false;
+            s.mergeT = 0;
+            s.mergeSide = 0;
+            if (!s.mergeBlocked) {
+              s.mergeBlocked = true;
+              s.shake = 0.95;
+            }
+          });
+          if (!blockedNotified[t]) {
+            blockedNotified[t] = true;
+            var midS = list[1];
+            Snd.deny();
+            buzz([20, 40, 20]);
+            floats.push({ x: midS.px, y: midS.py - 36, t: 0, text: '🔒 KẸP TRANG SAU ĐẦY!', big: true });
+            emit('mergeBlocked', { type: +t, x: midS.px, y: midS.py });
+          }
+        }
+      } else {
+        list.forEach(function (s) { s.mergeBlocked = false; });
+        delete blockedNotified[t];
+      }
+    });
     var groups = {};
     tray.forEach(function (s) { if (s.merge) (groups[s.type] = groups[s.type] || []).push(s); });
     Object.keys(groups).forEach(function (t) {
       var g = groups[t];
       if (g.length < 3 || !g.every(function (s) { return s.state === 'tray' && s.arrived; })) return;
-      g.forEach(function (s) { s.mergeT = (s.mergeT || 0) + dt / 0.15; });
-      var mid = g[1];
-      g.forEach(function (s) {
+      g.forEach(function (s) { s.mergeT = (s.mergeT || 0) + dt / 0.17; });
+      var mid = g[1], mt = Math.min(1, g[0].mergeT);
+      g.forEach(function (s, idx) {
+        s.mergeSide = idx - 1;
         if (s === mid) return;
-        s.px += (mid.px - s.px) * Math.min(1, dt * 22);
+        s.px += (mid.px - s.px) * Math.min(1, dt * 24);
       });
       if (g[0].mergeT < 1) return;
       /* Three become one: burst and move on. */
+      var hasHolo = g.some(function (s) { return s.gold; });
       g.forEach(function (s) {
         tray.splice(tray.indexOf(s), 1);
         s.state = 'done';
@@ -553,14 +762,38 @@
         if (hi >= 0) history.splice(hi, 1);
       });
       triplesDone++;
+      merges++;
       combo = clock - lastClear < 7 ? combo + 1 : 1;
       lastClear = clock;
       if (combo > 1) comboBonus += combo * 2;
       Snd.clear(combo);
-      buzz(24);
-      burst(mid.px, mid.py, 26, comboColor());
-      floats.push({ x: mid.px, y: mid.py - 34, t: 0, text: combo > 1 ? 'x' + combo : '+1', big: combo > 1 });
-      emit('clear', { type: +t, combo: combo, x: mid.px, y: mid.py });
+      buzz(hasHolo ? [20, 30, 24] : 24);
+      if (stageEl && !reduced) {
+        stageEl.classList.remove('shake');
+        void stageEl.offsetWidth;
+        stageEl.classList.add('shake');
+      }
+      screenShake = Math.max(screenShake, hasHolo ? 0.55 : combo >= 2 ? 0.35 : 0.18);
+      burst(mid.px, mid.py, hasHolo ? 40 : 28, comboColor());
+      shockwaves.push({ x: mid.px, y: mid.py, r0: 10, r1: slot * 1.9, t: 0, dur: 0.38, c: hasHolo ? '#FFD531' : '#FFFFFF', w: 5.5 });
+      if (hasHolo || combo >= 2) {
+        shockwaves.push({ x: mid.px, y: mid.py, r0: 6, r1: slot * 2.6, t: -0.05, dur: 0.46, c: hasHolo ? '#C864FF' : '#FF5A6E', w: 4 });
+      }
+      /* Holographic Prism Bonus: automatically loosens 1 taped or locked sticker on the board! */
+      if (hasHolo) {
+        var lockedTarget = stickers.filter(function (s) { return onSheet(s) && (s.tape || s.lock > peeled); })[0];
+        if (lockedTarget) {
+          var ltp = screenOf(lockedTarget);
+          addLightning(mid.px, mid.py, ltp.x, ltp.y, '#FFD531', 0.4);
+          if (lockedTarget.tape) ripTape(lockedTarget, 0.6, -0.9);
+          if (lockedTarget.lock > peeled) lockedTarget.lock = 0;
+          lockedTarget.pop = 1;
+        }
+        floats.push({ x: mid.px, y: mid.py - 56, t: 0, text: '✨ HOLO PRISM!', big: true });
+      }
+      floats.push({ x: mid.px, y: mid.py - 32, t: 0, text: combo >= 3 ? '🔥 FEVER x' + combo : combo > 1 ? 'COMBO x' + combo : '+1', big: combo > 1 || hasHolo });
+      refresh();
+      emit('clear', { type: +t, combo: combo, holo: hasHolo, x: mid.px, y: mid.py });
       updateDanger();
       hud();
     });
@@ -639,27 +872,46 @@
   function drawFaceAt(c, s, size) {
     var sp = spriteFor(s), hs = size / 2;
     if (hidden(s)) {
+      /* Silver Scratch-Off Foil coating! */
       c.drawImage(sp.back, -hs, -hs, size, size);
-      c.fillStyle = '#3B3454';
-      c.font = '800 ' + Math.round(size * 0.42) + 'px "Baloo 2","Be Vietnam Pro",system-ui,sans-serif';
+      c.save();
+      var fg = c.createLinearGradient(-hs, -hs, hs, hs);
+      fg.addColorStop(0, 'rgba(180,192,210,0.85)');
+      fg.addColorStop(0.35, 'rgba(248,250,255,0.95)');
+      fg.addColorStop(0.55, 'rgba(148,163,184,0.88)');
+      fg.addColorStop(0.8, 'rgba(241,245,249,0.92)');
+      fg.addColorStop(1, 'rgba(160,174,192,0.85)');
+      c.beginPath(); c.arc(0, 0, size * 0.37, 0, TAU);
+      c.fillStyle = fg; c.fill();
+      c.lineWidth = size * 0.03; c.strokeStyle = '#64748B'; c.setLineDash([4, 3]); c.stroke(); c.setLineDash([]);
+      c.fillStyle = '#334155';
+      c.font = '800 ' + Math.round(size * 0.34) + 'px "Baloo 2","Be Vietnam Pro",system-ui,sans-serif';
       c.textAlign = 'center'; c.textBaseline = 'middle';
-      c.fillText('?', 0, size * 0.03);
-    } else c.drawImage(sp.front, -hs, -hs, size, size);
+      c.fillText('✦?', 0, size * 0.02);
+      c.restore();
+    } else {
+      c.drawImage(sp.front, -hs, -hs, size, size);
+    }
   }
   function drawTape(c, size) {
-    var w = size * 0.92, h = size * 0.27;
+    var w = size * 0.94, h = size * 0.28;
     c.save();
     c.rotate(-0.42);
-    c.fillStyle = 'rgba(255,214,84,.92)';
+    var tg = c.createLinearGradient(-w / 2, -h / 2, w / 2, h / 2);
+    tg.addColorStop(0, 'rgba(255,120,150,0.92)');
+    tg.addColorStop(0.5, 'rgba(255,208,92,0.94)');
+    tg.addColorStop(1, 'rgba(255,140,102,0.92)');
+    c.fillStyle = tg;
     c.beginPath();
     c.moveTo(-w / 2, -h / 2);
-    for (var i = 1; i <= 4; i++) c.lineTo(-w / 2 + (i % 2 ? 3 : 0) * size / 60, -h / 2 + h * i / 4);
+    for (var i = 1; i <= 5; i++) c.lineTo(-w / 2 + (i % 2 ? 3.5 : 0) * size / 60, -h / 2 + h * i / 5);
     c.lineTo(w / 2, h / 2);
-    for (var j = 1; j <= 4; j++) c.lineTo(w / 2 - (j % 2 ? 3 : 0) * size / 60, h / 2 - h * j / 4);
+    for (var j = 1; j <= 5; j++) c.lineTo(w / 2 - (j % 2 ? 3.5 : 0) * size / 60, h / 2 - h * j / 5);
     c.closePath();
     c.fill();
-    c.fillStyle = 'rgba(255,255,255,.42)';
-    for (var x = -w / 2 + size * 0.04; x < w / 2 - size * 0.08; x += size * 0.14) c.fillRect(x, -h / 2, size * 0.05, h);
+    c.lineWidth = 1.2; c.strokeStyle = 'rgba(255,255,255,0.65)'; c.stroke();
+    c.fillStyle = 'rgba(255,255,255,.45)';
+    for (var x = -w / 2 + size * 0.05; x < w / 2 - size * 0.08; x += size * 0.13) c.fillRect(x, -h / 2, size * 0.045, h);
     c.restore();
   }
   function drawBadges(c, s, size) {
@@ -679,23 +931,37 @@
       c.restore();
     }
     if (s.gold) {
-      var gx = size * 0.27, gy = -size * 0.27, gr = size * 0.13;
-      c.beginPath(); c.arc(gx, gy, gr, 0, TAU); c.fillStyle = '#FFC62E'; c.fill();
-      c.lineWidth = size * 0.03; c.strokeStyle = '#2A2438'; c.stroke();
-      c.beginPath(); c.arc(gx, gy, gr * 0.52, 0, TAU); c.strokeStyle = '#B9820F'; c.lineWidth = size * 0.02; c.stroke();
+      var gx = size * 0.27, gy = -size * 0.27, gr = size * 0.14;
+      var hg = c.createLinearGradient(gx - gr, gy - gr, gx + gr, gy + gr);
+      hg.addColorStop(0, '#FF5A6E'); hg.addColorStop(0.5, '#FFD531'); hg.addColorStop(1, '#3FC1C9');
+      c.beginPath(); c.arc(gx, gy, gr, 0, TAU); c.fillStyle = hg; c.fill();
+      c.lineWidth = size * 0.03; c.strokeStyle = '#FFF'; c.stroke();
+      c.fillStyle = '#2A2438';
+      c.font = '800 ' + Math.round(size * 0.16) + 'px "Baloo 2",system-ui,sans-serif';
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText('★', gx, gy + size * 0.01);
+    }
+    if (s.twin >= 0 && stickers[s.twin] && onSheet(stickers[s.twin])) {
+      var tx = -size * 0.27, ty = -size * 0.27, tr2 = size * 0.13;
+      c.beginPath(); c.arc(tx, ty, tr2, 0, TAU); c.fillStyle = '#3FC1C9'; c.fill();
+      c.lineWidth = size * 0.028; c.strokeStyle = '#FFF'; c.stroke();
+      c.fillStyle = '#FFF';
+      c.font = '800 ' + Math.round(size * 0.15) + 'px "Baloo 2",system-ui,sans-serif';
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText('2x', tx, ty + size * 0.01);
     }
     if (s.tape) {
       /* Trays still to finish before the tape comes off, on a badge in the middle of the tape. */
-      var tr = size * 0.17;
+      var tr = size * 0.17, remTape = Math.max(1, s.tape - merges);
       c.beginPath(); c.arc(0, 0, tr, 0, TAU); c.fillStyle = '#2A2438'; c.fill();
       c.lineWidth = size * 0.025; c.strokeStyle = '#FFD654'; c.stroke();
       c.fillStyle = '#FFF';
       c.font = '800 ' + Math.round(size * 0.22) + 'px "Baloo 2",system-ui,sans-serif';
       c.textAlign = 'center'; c.textBaseline = 'middle';
-      c.fillText(String(s.tape - merges), 0, size * 0.015);
+      c.fillText(String(remTape), 0, size * 0.015);
     }
     if (s.lock && s.locked) {
-      var r = size * 0.2, n = s.lock - peeled;
+      var r = size * 0.2, n = Math.max(1, s.lock - peeled);
       c.beginPath(); c.arc(0, 0, r, 0, TAU); c.fillStyle = '#2A2438'; c.fill();
       c.lineWidth = size * 0.025; c.strokeStyle = '#FFF'; c.stroke();
       c.fillStyle = '#FFF';
@@ -925,16 +1191,59 @@
   }
   function drawFlying(s) {
     var sp = spriteFor(s), size = D * s.scale, t = s.state === 'fly' ? Math.max(0, Math.min(1, s.flyT)) : 1;
-    var extra = s.state === 'tray' && s.pop > 0 ? 1 + Math.sin(s.pop * 3.14) * 0.12 : 1;
+    var extra = s.state === 'tray' && s.pop > 0 ? 1 + Math.sin(s.pop * 3.14) * 0.14 : 1;
     var off = s.shake > 0 && !reduced ? Math.sin(s.shake * 34) * 3 * s.shake : 0;
     var flip = s.state === 'fly' ? Math.abs(Math.cos(t * Math.PI)) : 1;
+    var liftY = 0, tilt = 0, m = 1;
+    if (s.merge && s.mergeT) {
+      var mt = Math.min(1, s.mergeT);
+      liftY = -Math.sin(mt * Math.PI) * 14;
+      m = 1 + Math.sin(mt * Math.PI) * 0.26;
+      tilt = (s.mergeSide || 0) * Math.sin(mt * Math.PI) * 0.22;
+      /* Golden convergence glow around each merging item in the tray */
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(s.px + off, s.py + liftY, size * 0.48 * m, 0, TAU);
+      ctx.fillStyle = 'rgba(255, 213, 49, ' + (0.28 + 0.35 * mt) + ')';
+      ctx.fill();
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = 'rgba(255, 255, 255, ' + (0.5 + 0.5 * mt) + ')';
+      ctx.stroke();
+      ctx.restore();
+    }
     ctx.save();
-    ctx.translate(s.px + off, s.py); ctx.rotate(s.r);
-    if (s.merge && s.mergeT) { var m = 1 + Math.min(1, s.mergeT) * 0.15; ctx.scale(m, m); }
-    ctx.scale(extra * Math.max(0.06, flip), extra);
+    ctx.translate(s.px + off, s.py + liftY);
+    ctx.rotate(s.r + tilt);
+    ctx.scale(extra * m * Math.max(0.06, flip), extra * m);
+    if (s.mergeBlocked && s.state === 'tray') {
+      var bp = 0.55 + 0.45 * Math.sin(clock * 12);
+      ctx.beginPath();
+      ctx.arc(0, 0, size * 0.46, 0, TAU);
+      ctx.fillStyle = 'rgba(225, 29, 72, ' + (0.18 + 0.14 * bp) + ')';
+      ctx.fill();
+      ctx.lineWidth = 2.6;
+      ctx.setLineDash([5, 3]);
+      ctx.strokeStyle = 'rgba(225, 29, 72, ' + (0.7 + 0.3 * bp) + ')';
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     ctx.drawImage(sp.shadow, -size / 2, -size / 2, size, size);
     if (s.state === 'fly' && t < 0.5) ctx.drawImage(sp.back, -size / 2, -size / 2, size, size);
     else ctx.drawImage(sp.front, -size / 2, -size / 2, size, size);
+    if (s.mergeBlocked && s.state === 'tray') {
+      ctx.fillStyle = '#E11D48';
+      ctx.beginPath();
+      ctx.roundRect(-size * 0.36, size * 0.18, size * 0.72, size * 0.24, 5);
+      ctx.fill();
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = '#FFF';
+      ctx.stroke();
+      ctx.fillStyle = '#FFF';
+      ctx.font = '800 ' + Math.max(8, Math.round(size * 0.155)) + 'px "Baloo 2",system-ui,sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('🔒 ĐẦY', 0, size * 0.305);
+    }
     ctx.restore();
   }
   function drawHand(x, y, sc) {
@@ -961,12 +1270,79 @@
     drawHand(p.x + reach - mv * reach * 1.7, p.y + reach - mv * reach * 1.7, 0.8);
     ctx.restore();
   }
+  function drawHoloSheen(c, s, p, size) {
+    var hs = size * 0.38, phase = ((clock * 1.35 + s.id * 0.37) % 1.8) - 0.4;
+    c.save();
+    c.translate(p.x, p.y); c.rotate(s.r);
+    c.beginPath(); c.arc(0, 0, hs, 0, TAU); c.clip();
+    var gx = -hs + phase * hs * 2.2;
+    var g = c.createLinearGradient(gx - hs * 0.6, -hs, gx + hs * 0.6, hs);
+    g.addColorStop(0, 'rgba(255,90,110,0)');
+    g.addColorStop(0.25, 'rgba(255,90,110,0.28)');
+    g.addColorStop(0.45, 'rgba(255,213,49,0.34)');
+    g.addColorStop(0.65, 'rgba(63,193,201,0.34)');
+    g.addColorStop(0.85, 'rgba(200,100,255,0.28)');
+    g.addColorStop(1, 'rgba(200,100,255,0)');
+    c.fillStyle = g;
+    c.fillRect(-hs, -hs, hs * 2, hs * 2);
+    c.restore();
+  }
+  function drawGlueBridges(c) {
+    var size = D * k;
+    stickers.forEach(function (s) {
+      if (s.twin < s.id || !onSheet(s)) return;
+      var tw = stickers[s.twin];
+      if (!tw || !onSheet(tw)) return;
+      var p1 = screenOf(s), p2 = screenOf(tw);
+      var mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2 + Math.sin(clock * 6 + s.id) * 4;
+      c.save();
+      c.lineCap = 'round';
+      /* Outer glossy glue strand */
+      c.beginPath(); c.moveTo(p1.x, p1.y); c.quadraticCurveTo(mx, my, p2.x, p2.y);
+      c.lineWidth = Math.max(5, size * 0.14);
+      c.strokeStyle = 'rgba(63, 193, 201, 0.55)';
+      c.stroke();
+      /* Inner specular highlight */
+      c.beginPath(); c.moveTo(p1.x, p1.y); c.quadraticCurveTo(mx, my - 1.5, p2.x, p2.y);
+      c.lineWidth = Math.max(2, size * 0.05);
+      c.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+      c.setLineDash([6, 4]); c.lineDashOffset = -clock * 24;
+      c.stroke(); c.setLineDash([]);
+      c.restore();
+    });
+  }
   function render(dt) {
     if (staticDirty) buildStatic();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    var shX = screenShake > 0 && !reduced ? (Math.random() - 0.5) * 11 * screenShake : 0;
+    var shY = screenShake > 0 && !reduced ? (Math.random() - 0.5) * 11 * screenShake : 0;
+    ctx.save();
+    ctx.translate(shX * dpr, shY * dpr);
     ctx.drawImage(staticLayer, 0, 0);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.translate(shX, shY);
+    /* Fever Mode rainbow aura around the tray & sheet */
+    if (fever && state === 'play' && !reduced) {
+      var fTotal = cap * slot + (cap - 1) * trayGap, fPulse = 0.55 + Math.sin(clock * 12) * 0.3;
+      ctx.save();
+      var fg = ctx.createLinearGradient((W - fTotal) / 2, trayY, (W + fTotal) / 2, trayY + slot + 16);
+      fg.addColorStop(0, 'rgba(255,90,110,' + fPulse + ')');
+      fg.addColorStop(0.5, 'rgba(255,213,49,' + fPulse + ')');
+      fg.addColorStop(1, 'rgba(200,100,255,' + fPulse + ')');
+      ctx.beginPath(); ctx.roundRect((W - fTotal) / 2 - 9, trayY - 1, fTotal + 18, slot + 18, 15);
+      ctx.lineWidth = 4; ctx.strokeStyle = fg; ctx.stroke();
+      ctx.restore();
+    }
+    /* Live holographic rainbow sheen on uncovered gold/holo stickers + elastic glue bridges */
+    if (!reduced && !whirl) {
+      stickers.forEach(function (s) {
+        if (s.gold && s.state === 'board' && !s.peeling && !s.blocked && !hidden(s)) {
+          drawHoloSheen(ctx, s, screenOf(s), D * k);
+        }
+      });
+      drawGlueBridges(ctx);
+    }
     /* Magnet: the stickers it is about to lift glow through any sticker on top of them (an x-ray view). */
     stickers.forEach(function (s) {
       if (s.magnet === undefined || s.state !== 'board') return;
@@ -1023,6 +1399,51 @@
     stickers.forEach(function (s) { if ((s.state === 'board' && s.peeling) || s.state === 'out') drawPeeling(s); });
     tray.forEach(function (s) { if (s.state === 'tray') drawFlying(s); });
     stickers.forEach(function (s) { if (s.state === 'fly' && s.flyT > 0 || s.state === 'return') drawFlying(s); });
+    /* Paper Vacuum / Magic Peel Vortex */
+    if (vortex) {
+      var vp = Math.min(1, vortex.t / vortex.dur), vr = W * 0.42 * Math.sin(vp * Math.PI);
+      ctx.save();
+      ctx.translate(vortex.x, vortex.y);
+      ctx.rotate(clock * 14);
+      for (var vi = 0; vi < 3; vi++) {
+        ctx.beginPath();
+        ctx.arc(0, 0, vr * (0.4 + vi * 0.3), vi * 2.1, vi * 2.1 + 3.8);
+        ctx.lineWidth = (5 - vi) * (1 - vp * 0.5);
+        ctx.strokeStyle = vi === 0 ? 'rgba(255,213,49,' + (1 - vp) + ')' : 'rgba(63,193,201,' + (0.85 - vp * 0.8) + ')';
+        ctx.lineCap = 'round';
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    /* Shockwave rings */
+    shockwaves.forEach(function (sw) {
+      if (sw.t < 0) return;
+      var sp = Math.min(1, sw.t / sw.dur), sr = sw.r0 + (sw.r1 - sw.r0) * ease(sp);
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - sp);
+      ctx.beginPath(); ctx.arc(sw.x, sw.y, sr, 0, TAU);
+      ctx.lineWidth = sw.w * (1 - sp * 0.7) + 1;
+      ctx.strokeStyle = sw.c;
+      ctx.stroke();
+      ctx.restore();
+    });
+    /* Lightning & Rainbow Beams */
+    lightnings.forEach(function (lg) {
+      var lp = Math.min(1, lg.t / lg.dur);
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - lp * lp);
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.beginPath();
+      lg.pts.forEach(function (pt, idx) { if (idx === 0) ctx.moveTo(pt[0], pt[1]); else ctx.lineTo(pt[0], pt[1]); });
+      ctx.lineWidth = 6 * (1 - lp * 0.5);
+      ctx.strokeStyle = lg.c;
+      ctx.shadowColor = lg.c; ctx.shadowBlur = 12;
+      ctx.stroke();
+      ctx.lineWidth = 2.2;
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.stroke();
+      ctx.restore();
+    });
     ripped.forEach(function (r) {
       ctx.save(); ctx.globalAlpha = Math.max(0, r.life); ctx.translate(r.x, r.y); ctx.rotate(r.r);
       drawTape(ctx, D * k);
@@ -1037,7 +1458,7 @@
       var e = ease(Math.min(1, f.t));
       ctx.save();
       ctx.globalAlpha = 1 - f.t * f.t;
-      ctx.font = '800 ' + (f.big ? 34 : 24) + 'px "Baloo 2",system-ui,sans-serif';
+      ctx.font = '800 ' + (f.big ? 28 : 22) + 'px "Baloo 2",system-ui,sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.lineWidth = 6; ctx.lineJoin = 'round'; ctx.strokeStyle = '#2A2438'; ctx.strokeText(f.text, f.x, f.y - e * 36);
       ctx.fillStyle = f.big ? '#FFC62E' : '#FFF'; ctx.fillText(f.text, f.x, f.y - e * 36);
@@ -1045,6 +1466,7 @@
     });
     if (state === 'play') drawGuide(dt);
     if (drag && drag.touch && drag.st && state === 'play') drawBubble(dt);
+    ctx.restore();
   }
   /* While a finger holds a sticker, a bubble floats above it showing which sticker it is and how far it is peeled. */
   function drawBubble(dt) {
@@ -1264,6 +1686,69 @@
     canAddSlot: function () { return cap < Core.MAX_CAP; },
     /* Conveyor mode: the page finished a tray, which loosens tape. */
     merge: function () { merges++; staticDirty = true; refresh(); },
+    /* Demo helper: fills the tray to 6/7 slots with non-matching stickers so the presenter can demo Vacuum / Wand rescue! */
+    triggerDemoPinch: function () {
+      if (state !== 'play') return false;
+      var counts = {};
+      tray.forEach(function (s) { if (!s.merge) counts[s.type] = (counts[s.type] || 0) + 1; });
+      var board = stickers.filter(function (s) { return s.state === 'board' && !s.peeling; });
+      var added = 0;
+      for (var i = 0; i < board.length && logicalTray() < cap - 1; i++) {
+        var s = board[i];
+        if ((counts[s.type] || 0) < 2) {
+          counts[s.type] = (counts[s.type] || 0) + 1;
+          s.tape = false; s.lock = 0; s.revealed = true; s.twin = -1;
+          detach(s);
+          startFly(s, screenOf(s).x, screenOf(s).y);
+          added++;
+        }
+      }
+      return added > 0;
+    },
+    /* Demo helper: pulls a full triple of a specific sticker type (e.g. a next-page sticker) off the board to demo the Bookmark Pocket! */
+    pullType: function (targetType, allowForce) {
+      if (state !== 'play') return false;
+      var board = stickers.filter(function (s) { return s.state === 'board' && !s.peeling; });
+      var haveInTray = tray.filter(function (s) { return s.type === targetType && !s.merge; }).length;
+      var need = Math.max(0, 3 - haveInTray);
+      if (need === 0) {
+        /* Already 3 in tray! Re-trigger blocked notification if blocked */
+        delete blockedNotified[targetType];
+        tray.forEach(function (s) { if (s.type === targetType) s.shake = 1; });
+        return true;
+      }
+      var picks = board.filter(function (s) { return s.type === targetType; }).sort(function (a, b) { return (a.blocked - b.blocked) || (b.z - a.z); }).slice(0, need);
+      if (picks.length < need && allowForce) {
+        var extra = board.filter(function (s) { return s.type !== targetType && picks.indexOf(s) < 0; }).slice(0, need - picks.length);
+        extra.forEach(function (s) { s.type = targetType; spriteOf(targetType); picks.push(s); });
+      }
+      if (picks.length < need) return false;
+      var canM = !cb.canMerge || cb.canMerge(targetType);
+      var coreX = W / 2, coreY = trayY + slot / 2 + 8;
+      delete blockedNotified[targetType];
+      picks.forEach(function (s, i) {
+        s.tape = false; s.lock = 0; s.revealed = true; s.twin = -1; s.A = null; s.F = null;
+        var p = screenOf(s);
+        addLightning(coreX, coreY, p.x, p.y, canM ? '#FFD531' : '#FF5A6E', 0.42);
+        shockwaves.push({ x: p.x, y: p.y, r0: 6, r1: D * k * 0.85, t: 0, dur: 0.38, c: canM ? '#FFD531' : '#FF5A6E', w: 4.5 });
+        burst(p.x, p.y, 14, canM ? '#FFD531' : '#FF5A6E');
+        s.state = 'out-magnet';
+        peeled++;
+        var at = -1;
+        for (var q = 0; q < tray.length; q++) if (tray[q].type === s.type) at = q;
+        if (at >= 0) tray.splice(at + 1, 0, s); else tray.push(s);
+        s.arrived = false;
+        s.merge = canM;
+        s.mergeBlocked = false;
+        startFly(s, p.x, p.y);
+        s.flyT = -i * 0.05;
+      });
+      if (canM) tray.forEach(function (s) { if (s.type === targetType) s.merge = true; });
+      screenShake = 0.6;
+      Snd.magic ? Snd.magic() : Snd.power();
+      refresh(); updateDanger(); hud();
+      return true;
+    },
     /* Test hook: peel the next sticker from the level's proof order. */
     debugStep: function () {
       if (state !== 'play') return state;
@@ -1281,7 +1766,10 @@
       return null;
     },
     debugState: function () {
-      return { state: state, tray: logicalTray(), cap: cap, peak: peakReached, peeled: peeled, left: stickers.filter(onSheet).length, triples: triplesDone };
+      return {
+        state: state, tray: logicalTray(), cap: cap, peak: peakReached, peeled: peeled, left: stickers.filter(onSheet).length, triples: triplesDone,
+        animating: clock < hold || stickers.some(function (s) { return s.peeling || s.state === 'out' || s.state === 'fly' || s.state === 'return'; })
+      };
     }
   };
 })(window);
