@@ -158,7 +158,7 @@
      Walks one removal order and picks each sticker's type so the tray stays at or under `peak`.
      That walk is the level's proof of solvability. `ids` are the stickers still on the sheet.
      trayCounts holds types already in the tray; pool holds one type per complete triple left. */
-  function assignTypes(stickers, ids, trayCounts, pool, peak, spread, rng) {
+  function assignTypes(stickers, ids, trayCounts, pool, peak, spread, rng, profile) {
     var left = {}, order = [], types = {}, open = {}, tray = 0;
     ids.forEach(function (id) {
       left[id] = stickers[id].blockers.filter(function (b) { return ids.indexOf(b) >= 0; }).length;
@@ -175,13 +175,16 @@
       var singles = [], pairs = [];
       for (var t in open) { if (open[t] === 1) singles.push(t); else if (open[t] === 2) pairs.push(t); }
       var options = [];
+      var progress = profile ? (profile.start + order.length) / profile.total : order.length / Math.max(1, ids.length);
+      var pressure = profile ? (progress < 0.3 || progress >= 0.67 ? 0.01 : 0.94) : spread;
+      var movePeak = profile && (progress < 0.3 || progress >= 0.67) ? Math.min(3, peak) : peak;
       /* A move is safe when the tray stays below the peak, and at peak-1 a pair is ready to finish. */
       /* A second live triple of one type would merge in the tray, so a new triple must be a closed type. */
       var fresh = -1;
       for (var q = pool.length - 1; q >= 0; q--) if (!open[pool[q]]) { fresh = q; break; }
-      if (fresh >= 0 && tray + 1 <= peak - 1 && (tray + 1 < peak - 1 || hasPair())) options.push(['new', spread]);
-      if (singles.length && tray + 1 <= peak - 1) options.push(['grow', 0.35]);
-      if (pairs.length) options.push(['finish', 1.05 - spread]);
+      if (fresh >= 0 && tray + 1 <= movePeak - 1 && (tray + 1 < movePeak - 1 || hasPair())) options.push(['new', pressure]);
+      if (singles.length && tray + 1 <= movePeak - 1) options.push(['grow', 0.35]);
+      if (pairs.length) options.push(['finish', 1.05 - pressure]);
       if (!options.length) {
         clean = false;
         if (singles.length) options.push(['grow', 1]);
@@ -211,7 +214,181 @@
     return { types: types, order: order, clean: clean };
   }
 
+  /* Scrapbook campaign rule machine: hidden papers, key/ribbon groups, duo stickers, two-side flaps & frozen layers. */
+  function memberCover(s, id) {
+    for (var i = 0; i < (s.covers || []).length; i++) {
+      var c = s.covers[i];
+      if (c.members.indexOf(id) >= 0 && (!s.coverOpened[c.id] || (s.coverOpening && s.coverOpening[c.id]))) return c;
+    }
+    return null;
+  }
+  function coverContainsPoint(cover, x, y) {
+    var r = cover.rect, dx = x - r.x - r.w / 2, dy = y - r.y - r.h / 2;
+    var cs = Math.cos(cover.angle || 0), sn = Math.sin(cover.angle || 0);
+    return Math.abs(dx * cs + dy * sn) <= r.w / 2 && Math.abs(-dx * sn + dy * cs) <= r.h / 2;
+  }
+  function coverAtPoint(s, x, y, holderHit) {
+    for (var i = (s.covers || []).length - 1; i >= 0; i--) {
+      var c = s.covers[i];
+      if (s.coverOpened[c.id] && !(s.coverOpening && s.coverOpening[c.id])) continue;
+      if (coverContainsPoint(c, x, y) && !c.holders.some(function (id) { return !s.removed[id] && holderHit && holderHit(id, x, y); })) return c;
+    }
+    return null;
+  }
+  function revealRules(s) {
+    s.tiles.forEach(function (t) {
+      if (!s.removed[t.id] && !memberCover(s, t.id) && !t.blockers.some(function (id) { return !s.removed[id]; }) &&
+          (t.flap == null || t.flap !== s.flap)) s.revealed[t.id] = true;
+    });
+    return s;
+  }
+  function createRuleState(level) {
+    return revealRules({ tiles: level.stickers, covers: level.covers || [], coverOpened: {}, coverOpening: {}, removed: [], revealed: [], opened: {}, tray: [], merges: 0,
+      peeled: 0, cap: BASE_CAP, flap: 0, spread: 0, missions: level.cfg.missions || [], decoys: level.cfg.decoys || [],
+      filled: (level.cfg.missions || []).map(function (p) { return p.map(function () { return false; }); }) });
+  }
+  function ruleAccess(s, t) {
+    if (!t || s.removed[t.id]) return 'removed';
+    if (memberCover(s, t.id)) return 'paper';
+    if (t.blockers.some(function (id) { return !s.removed[id]; })) return 'covered';
+    if (t.flap != null && t.flap === s.flap) return 'flap';
+    if (t.group && !s.opened[t.group]) return 'key';
+    if (t.tape && t.tape > s.merges) return 'glue';
+    if (t.lock > s.peeled) return 'locked';
+    return null;
+  }
+  function transition(s, action, gate) {
+    var ids = [], clears = [], reason, t = s.tiles[action.id];
+    if (action.type === 'peel') {
+      if (!t) return { ok: false, reason: 'removed' };
+      ids = t.duo == null ? [t.id] : [t.id, t.duo].sort(function (a, b) { return a - b; });
+      for (var i = 0; i < ids.length; i++) {
+        reason = ruleAccess(s, s.tiles[ids[i]]);
+        if (reason) return { ok: false, reason: reason };
+      }
+      if (s.tray.length + ids.length > s.cap) return { ok: false, reason: 'capacity' };
+    } else if (action.type !== 'toggle') return { ok: false, reason: 'action' };
+    var n = Object.assign({}, s, { removed: s.removed.slice(), revealed: s.revealed.slice(),
+      opened: Object.assign({}, s.opened), coverOpened: Object.assign({}, s.coverOpened), coverOpening: Object.assign({}, s.coverOpening), tray: s.tray.slice(), filled: s.filled.map(function (p) { return p.slice(); }) });
+    if (action.type === 'toggle') { n.flap = 1 - n.flap; return { ok: true, state: revealRules(n), ids: [], clears: [] }; }
+    for (var j = 0; j < ids.length; j++) {
+      var tile = s.tiles[ids[j]], type = tile.type;
+      n.removed[tile.id] = true; n.revealed[tile.id] = true; n.peeled++;
+      if (tile.key) n.opened[tile.key] = true;
+      n.tray.push(type);
+      if (n.tray.filter(function (v) { return v === type; }).length < 3) continue;
+      var page = -1, slot = -1;
+      if (gate && !gate(type, clears)) return { ok: false, reason: 'page' };
+      for (var p = n.spread * 2; p < Math.min(n.missions.length, n.spread * 2 + 2) && page < 0; p++) {
+        for (var k = 0; k < n.missions[p].length; k++) if (n.missions[p][k] === type && !n.filled[p][k]) { page = p; slot = k; break; }
+      }
+      if (n.missions.length && page < 0 && n.decoys.indexOf(type) < 0) return { ok: false, reason: 'page' };
+      if (page >= 0) n.filled[page][slot] = true;
+      var take = 3;
+      n.tray = n.tray.filter(function (v) { if (v === type && take) { take--; return false; } return true; });
+      n.merges++; clears.push(type);
+    }
+    n.covers.forEach(function (c) { if (c.holders.every(function (id) { return n.removed[id]; })) n.coverOpened[c.id] = true; });
+    while (n.spread * 2 + 2 < n.missions.length && n.filled.slice(n.spread * 2, n.spread * 2 + 2).every(function (p) { return p.every(Boolean); })) n.spread++;
+    return { ok: true, state: revealRules(n), ids: ids, clears: clears };
+  }
+  function flapBounds(paper, edge, side) {
+    var x = side ? edge : paper.x, right = side ? paper.x + paper.w : edge;
+    return { x: x, y: paper.y + 4, w: right - x, h: paper.h - 8 };
+  }
+  function flapCoversPoint(paper, edge, side, x, y) {
+    var b = flapBounds(paper, edge, side);
+    return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
+  }
+  function nextWitnessAction(level, state) {
+    var witness = level.witness || [];
+    for (var i = 0; i < witness.length; i++) {
+      var action = witness[i];
+      if (action.type !== 'peel' || state.removed[action.id]) continue;
+      var tile = level.stickers[action.id];
+      return tile.flap != null && tile.flap === state.flap ? { type: 'toggle' } : action;
+    }
+    return null;
+  }
+  function replayCampaign(level, actions) {
+    var s = createRuleState(level), witness = actions || level.witness, peak = 0, profile = [];
+    for (var i = 0; i < witness.length; i++) {
+      var r = transition(s, witness[i]);
+      if (!r.ok) return { ok: false, reason: r.reason, step: i, state: s };
+      peak = Math.max(peak, s.tray.length + r.ids.length); if (r.ids.length) profile.push({ peeled: s.peeled, before: s.tray.length, committed: s.tray.length + r.ids.length, after: r.state.tray.length, spread: s.spread }); s = r.state;
+    }
+    return { ok: s.removed.filter(Boolean).length === s.tiles.length && !s.tray.length && s.filled.every(function (p) { return p.every(Boolean); }), state: s, peak: peak, profile: profile, actions: witness };
+  }
+  function buildScrapbook(cfg) {
+    var spec = cfg.scrapbook;
+    for (var attempt = 0; attempt < 128; attempt++) {
+      var rng = makeRng(cfg.seed + attempt * 65537), list = buildPositions(cfg, rng);
+      var covers = [];
+      if (spec.hidden > 0) {
+        var memberCount = Math.max(2, Math.round(list.length * spec.hidden)), members = [];
+        if (memberCount >= list.length - 1) throw new Error('Mystery paper needs an outside holder at level ' + cfg.n);
+        list.forEach(function (t, id) {
+          if (id < memberCount) { members.push(id); t.x = 98; t.y = id % 2 ? 280 : 208; t.rot *= 0.5; }
+          else { t.x = 232 + (id % 2) * 68; t.y = 60 + ((id - memberCount) % 6) * 64; }
+        });
+        var holder = list.length - 1; list[holder].x = 98; list[holder].y = 122; list[holder].rot = -0.12;
+        covers.push({ id: 0, rect: { x: 18, y: 140, w: 160, h: 214 }, angle: 0, members: members, holders: [holder] });
+      }
+      linkBlockers(list);
+      list.forEach(function (s, id) { s.id = id; s.z = id; s.tape = false; s.lock = 0; s.gold = false; s.mystery = false; s.twin = -1; if (spec.flap) s.flap = s.x < BOARD_W / 2 ? 0 : 1; });
+      var order = [], removed = {}, candidates = [];
+      while (order.length < list.length) {
+        var free = shuffle(list.filter(function (t) { return !removed[t.id] && !t.blockers.some(function (id) { return !removed[id]; }) && (!covers.length || covers[0].members.indexOf(t.id) < 0 || removed[covers[0].holders[0]]); }), rng);
+        var a = covers.length && !removed[covers[0].holders[0]] ? list[covers[0].holders[0]] : free[0];
+        if (!a) throw new Error('Mystery paper geometry has no legal next sticker at level ' + cfg.n);
+        var b = covers.length && a.id === covers[0].holders[0] ? null : free.filter(function (t) { return t.id !== a.id && t.flap === a.flap && (!covers.length || (covers[0].members.indexOf(t.id) >= 0) === (covers[0].members.indexOf(a.id) >= 0)); }).sort(function (x, y) { return Math.abs(x.x - a.x) + Math.abs(x.y - a.y) - Math.abs(y.x - a.x) - Math.abs(y.y - a.y); })[0];
+        if (b) { candidates.push(order.length); [a, b].sort(function (x, y) { return x.id - y.id; }).forEach(function (t) { order.push(t.id); removed[t.id] = true; }); }
+        else { order.push(a.id); removed[a.id] = true; }
+      }
+      var offset = 0, phaseOf = [], held = {}, made = 0, doneBy = [], counts = [];
+      for (var p = 0; p < cfg.missions.length; p += 2) {
+        var pool = (cfg.missions[p] || []).concat(cfg.missions[p + 1] || []), abstract = [];
+        for (var q = 0; q < pool.length * 3; q++) abstract.push({ blockers: [], blocks: [] });
+        var deal = assignTypes(abstract, abstract.map(function (_, id) { return id; }), {}, pool.slice().reverse(), cfg.peak, cfg.spread, rng, { start: offset, total: list.length });
+        deal.order.forEach(function (id) { list[order[offset]].type = deal.types[id]; phaseOf[offset] = p / 2; offset++; });
+      }
+      (cfg.decoys || []).forEach(function (type) { for (var dc = 0; dc < 3; dc++) { list[order[offset]].type = type; phaseOf[offset] = Math.ceil(cfg.missions.length / 2); offset++; } });
+      order.forEach(function (id, i) { doneBy[i] = made; counts[i] = Object.keys(held).reduce(function (n, t) { return n + held[t]; }, 0); var type = list[id].type; held[type] = (held[type] || 0) + 1; if (held[type] === 3) { delete held[type]; made++; } });
+      var duoSpots = candidates.filter(function (i) { return counts[i] + 2 <= cfg.peak && phaseOf[i] === phaseOf[i + 1] && list[order[i]].type !== list[order[i + 1]].type && (list.length < 18 || (i / list.length >= 0.28 && i / list.length < 0.67)); });
+      var glueSpots = order.map(function (_, i) { return i; }).filter(function (i) { return doneBy[i] >= spec.glueLayers; });
+      if (duoSpots.length < spec.duo || glueSpots.length < spec.glue) continue;
+      shuffle(duoSpots, rng).slice(0, spec.duo).forEach(function (i) { list[order[i]].duo = order[i + 1]; list[order[i + 1]].duo = order[i]; });
+      for (var g = 0; g < spec.key; g++) {
+        var ki = g, gi = Math.max(spec.key + g * 2, Math.floor(order.length * 0.55) + g * 2), glyph = String.fromCharCode(65 + g);
+        list[order[ki]].key = glyph;
+        for (var h = gi; h < Math.min(gi + 2, order.length); h++) list[order[h]].group = glyph;
+      }
+      shuffle(glueSpots, rng).slice(0, spec.glue).forEach(function (i) { var t = list[order[i]]; t.tape = spec.glueLayers; t.glueLayers = spec.glueLayers; });
+      var lv = { cfg: cfg, stickers: list, covers: covers, solution: order, clean: true, witness: [] }, sim = createRuleState(lv);
+      var valid = true;
+      for (var step = 0; step < order.length; step++) {
+        var tile = list[order[step]];
+        if (sim.removed[tile.id]) continue;
+        if (tile.flap != null && tile.flap === sim.flap) { var toggle = { type: 'toggle' }; lv.witness.push(toggle); sim = transition(sim, toggle).state; }
+        var action = { type: 'peel', id: tile.id }, result = transition(sim, action);
+        if (!result.ok) { valid = false; break; }
+        lv.witness.push(action); sim = result.state;
+      }
+      if (valid && sim.filled.every(function (p) { return p.every(Boolean); })) {
+        var proof = replayCampaign(lv), means = [0, 1, 2].map(function (third) {
+          var segment = proof.profile.filter(function (a) { return Math.min(2, Math.floor(a.peeled / list.length * 3)) === third; });
+          return segment.reduce(function (sum, a) { return sum + a.committed; }, 0) / segment.length;
+        });
+        if (proof.peak > cfg.peak) continue;
+        if (cfg.peak >= 4 && cfg.triples >= 6 && !(means[1] > means[0] && means[1] > means[2])) continue;
+        return lv;
+      }
+    }
+    throw new Error('Cannot build legal scrapbook deal for level ' + cfg.n);
+  }
+
   function buildLevel(cfg) {
+    if (cfg.scrapbook) return buildScrapbook(cfg);
     var rng = makeRng(cfg.seed);
     var list = buildPositions(cfg, rng);
     linkBlockers(list);
@@ -371,6 +548,9 @@
     makeRng: makeRng, shuffle: shuffle, clamp: clamp, tierOf: tierOf, albumOf: albumOf,
     levelConfig: levelConfig, dailyConfig: dailyConfig, pictureConfig: pictureConfig, PICS: PICS, huntTargets: huntTargets, buildLevel: buildLevel, redeal: redeal,
     starLimits: starLimits, starsFor: starsFor, coinReward: coinReward,
-    replaySolution: replaySolution, playBot: playBot
+    replaySolution: replaySolution, playBot: playBot,
+    createRuleState: createRuleState, ruleAccess: ruleAccess, transition: transition, replayCampaign: replayCampaign,
+    memberCover: memberCover, coverContainsPoint: coverContainsPoint, coverAtPoint: coverAtPoint,
+    revealRules: revealRules, flapBounds: flapBounds, flapCoversPoint: flapCoversPoint, nextWitnessAction: nextWitnessAction
   };
 })(typeof window !== 'undefined' ? window : globalThis);

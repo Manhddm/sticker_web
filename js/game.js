@@ -13,7 +13,7 @@
   var tmpA = Art.makeCanvas(Art.SPR), ta = tmpA.getContext('2d');
   var tmpB = Art.makeCanvas(Art.SPR), tb = tmpB.getContext('2d');
   var W = 320, H = 480, dpr = 1, k = 1, ox = 0, oy = 0, slot = 44, trayGap = 5, trayY = 0;
-  var level = null, stickers = [], tray = [], particles = [], floats = [], ripped = [];
+  var level = null, stickers = [], tray = [], particles = [], floats = [], ripped = [], boardRings = [];
   var shockwaves = [], lightnings = [], vortex = null, screenShake = 0, fever = false;
   var state = 'idle', cap = Core.BASE_CAP, album = 0, raf = 0, last = 0, merges = 0;
   /* Helper animations: the sheet ignores taps until `hold` (clock time); `whirl` is the shuffle in progress. */
@@ -21,8 +21,44 @@
   var drag = null, staticDirty = true, peeled = 0, peakReached = 0, triplesDone = 0;
   var combo = 0, lastClear = -99, clock = 0, history = [], usedContinue = false, usedBoosters = 0;
   var goldTaken = 0, comboBonus = 0, dangerOn = false, guide = null, idle = 0, kbSel = -1, ending = false, blockedNotified = {};
+  var heldTypes = {}, rules = null, lesson = null, helperStock = {};
+  var paperMotion = {}, paperShake = {}, paperHover = -1, holderMasks = {};
   var paperR = null, picCv = null, picKey = '', picWin = 0, maskCv = document.createElement('canvas'), hunt = [];
   var settings = { tapPeel: true, haptics: true, idleHint: true };
+  function paperForTile(id) { return rules && Core.memberCover(rules, id); }
+  function holderArtHit(id, x, y) {
+    var s = stickers[id];
+    if (!s || s.state !== 'board' || s.peeling) return false;
+    var local = toLocal(s, x - s.x, y - s.y), u = Math.floor((local.x / D + 0.5) * Art.SPR), v = Math.floor((local.y / D + 0.5) * Art.SPR);
+    if (u < 0 || v < 0 || u >= Art.SPR || v >= Art.SPR) return false;
+    if (!holderMasks[s.type]) {
+      var front = spriteFor(s).front;
+      if (!front.getContext) return false;
+      holderMasks[s.type] = front.getContext('2d').getImageData(0, 0, Art.SPR, Art.SPR).data;
+    }
+    return holderMasks[s.type][(v * Art.SPR + u) * 4 + 3] > 24;
+  }
+  function paperHit(x, y) { return rules && Core.coverAtPoint(rules, x, y, holderArtHit); }
+  function denyPaper(cover) {
+    paperShake[cover.id] = 1;
+    cover.holders.forEach(function (id) { if (onSheet(stickers[id])) stickers[id].pop = 1; });
+    staticDirty = true; Snd.deny(); emit('scrapbookDeny', 'paper');
+  }
+  function ruleSnapshot() {
+    return Object.assign({}, rules, {
+      cap: cap, merges: merges, peeled: peeled,
+      removed: stickers.map(function (t) { return !onSheet(t); }),
+      tray: tray.filter(function (t) { return !t.merge; }).map(function (t) { return t.type; })
+    });
+  }
+  function scrapbookBusy() { return Object.keys(paperMotion).length > 0 || stickers.some(function (s) { return s.state === 'out' || s.state === 'fly' || s.state === 'return' || s.peeling || (s.merge && s.state !== 'done'); }); }
+  function preflight(st) { return Core.transition(ruleSnapshot(), { type: 'peel', id: st.id }, function (type, clears) { return !cb.canClearCount ? canBurst(type) : cb.canClearCount(type, clears); }); }
+  function toggleFlap() {
+    if (!rules || !level.cfg.scrapbook.flap || state !== 'play' || scrapbookBusy()) return false;
+    rules = Core.transition(ruleSnapshot(), { type: 'toggle' }).state;
+    staticDirty = true; refresh(); hud(); emit('flap', rules.flap); lessonEvent('flap'); return true;
+  }
+  function lessonEvent(kind) { if (lesson && lesson.kind === kind) { lesson = null; emit('lessonDone', kind); } }
   var reduced = root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   function emit(name, data) { if (cb[name]) cb[name](data); }
@@ -73,30 +109,31 @@
   function refresh() {
     stickers.forEach(function (s) {
       if (!onSheet(s)) return;
-      var blocked = s.blockers.some(function (b) { return onSheet(stickers[b]); });
+      var blocked = s.blockers.some(function (b) { return onSheet(stickers[b]); }) || !!paperForTile(s.id) || !!(rules && s.flap != null && s.flap === rules.flap);
       if (blocked !== s.blocked) { s.blocked = blocked; staticDirty = true; }
       if (!blocked && s.mystery && !s.revealed) {
         s.revealed = true; s.pop = 1; staticDirty = true;
-        if (clock > 0.1) {
+        if (!rules && clock > 0.1) {
           var mp = screenOf(s);
           Snd.scratch && Snd.scratch();
-          burst(mp.x, mp.y, 16, '#E2E8F0');
+          burst(mp.x, mp.y, 16, '#E2E8F0', { stars: true });
           shockwaves.push({ x: mp.x, y: mp.y, r0: 8, r1: D * k * 0.72, t: 0, dur: 0.35, c: '#FFF', w: 4 });
         }
       }
-      /* Tape holds a sticker down until the page reports enough finished trays (Game.merge). */
+      /* Tape / Ice holds a sticker down until the page reports enough finished trays (Game.merge). */
       if (s.tape && s.tape <= merges && s.state === 'board') ripTape(s, 0.5, -0.8);
-      var locked = s.lock > peeled || !!s.tape;
+      var locked = s.lock > peeled || !!s.tape || !!(rules && s.group && !rules.opened[s.group]);
       if (locked !== s.locked) {
         s.locked = locked; staticDirty = true;
         if (!locked) {
           s.pop = 1;
-          if (clock > 0.1) {
+          if (!rules && clock > 0.1) {
             var lp = screenOf(s);
             shockwaves.push({ x: lp.x, y: lp.y, r0: 6, r1: D * k * 0.68, t: 0, dur: 0.32, c: '#FFD531', w: 4 });
           }
         }
       }
+      if (rules && rules.revealed[s.id] && !paperForTile(s.id)) s.revealed = true;
     });
   }
   function logicalTray() { return tray.filter(function (s) { return !s.merge; }).length; }
@@ -111,12 +148,17 @@
   function start(cfg, callbacks) {
     cb = callbacks || {};
     level = Core.buildLevel(cfg);
+    rules = cfg.scrapbook ? Core.createRuleState(level) : null; lesson = null;
+    paperMotion = {}; paperShake = {}; paperHover = -1; holderMasks = {};
+    helperStock = { undo: 3, slot: 3, magnet: 3, shuffle: 3 };
+    heldTypes = {};
     album = cfg.album;
     Art.clearCache(album);
     stickers = level.stickers.map(function (s) {
       return {
         id: s.id, type: s.type, ammo: s.ammo || 0, x: s.x, y: s.y, rot: s.rot, z: s.z, blockers: s.blockers, blocks: s.blocks,
         tape: s.tape, mystery: s.mystery, gold: s.gold, lock: s.lock, twin: s.twin !== undefined ? s.twin : -1,
+        key: s.key, group: s.group, duo: s.duo, flap: s.flap, glueLayers: s.glueLayers,
         state: 'board', blocked: false, locked: false, revealed: false, A: null, F: null, peel: 0,
         shake: 0, pop: 0, px: 0, py: 0, scale: 1, r: s.rot, spawn: 0
       };
@@ -124,7 +166,7 @@
     /* Build sprites before the first frame so the opening stays smooth. */
     var seen = {};
     stickers.forEach(function (s) { if (!seen[s.type]) { seen[s.type] = 1; spriteOf(s.type); } });
-    tray = []; particles = []; floats = []; ripped = []; history = [];
+    tray = []; particles = []; floats = []; ripped = []; boardRings = []; history = [];
     shockwaves = []; lightnings = []; vortex = null; screenShake = 0; fever = false;
     cap = Core.BASE_CAP; drag = null; peeled = 0; peakReached = 0; triplesDone = 0; combo = 0; lastClear = -99;
     merges = 0; hold = 0; whirl = null; clock = 0; usedContinue = false; usedBoosters = 0; goldTaken = 0; comboBonus = 0; dangerOn = false; guide = null;
@@ -161,7 +203,21 @@
     var t = -b + Math.sqrt(Math.max(0, disc));
     return { x: lx + bx * t, y: ly + by * t };
   }
+  function canBurst(type) { return !cb.canClear || !!cb.canClear(type); }
+  function spawnRing(x, y, r0, r1, c, w, dur) {
+    if (reduced) return;
+    boardRings.push({ x: x, y: y, r0: r0, r1: r1, c: c || '#FFF', w: w || 4, t: 0, dur: dur || 0.34 });
+  }
   function canAdd(st) {
+    if (rules) {
+      if (scrapbookBusy()) return false;
+      var check = st ? preflight(st) : { ok: logicalTray() < cap };
+      if (check.ok) return true;
+      if (st) Snd.deny();
+      if (check.reason === 'tray') trayBump();
+      else if (check.reason) emit('scrapbookDeny', check.reason);
+      return false;
+    }
     if (beltMode()) {
       var ok = !cb.canTake || cb.canTake(st ? st.type : null);
       if (ok === true) return true;
@@ -193,6 +249,14 @@
     st.shake = 1;
     Snd.deny();
     staticDirty = true;
+    if (rules) {
+      var check = preflight(st);
+      if (check.reason && check.reason !== 'tray') {
+        if (check.reason === 'covered') st.blockers.forEach(function (b) { if (onSheet(stickers[b])) stickers[b].pop = 0.8; });
+        else if (check.reason === 'group') stickers.forEach(function (other) { if (other.key === st.group && onSheet(other)) other.pop = 0.9; });
+        emit('scrapbookDeny', check.reason); return;
+      }
+    }
     if (st.blocked) {
       emit('toast', { key: 'covered' });
       st.blockers.forEach(function (b) { if (onSheet(stickers[b])) stickers[b].pop = 0.8; });
@@ -205,7 +269,16 @@
     Snd.rip();
     buzz(14);
     var p = screenOf(st);
-    ripped.push({ x: p.x, y: p.y, r: st.r - 0.5, vx: dirx * 120 + 40, vy: diry * 120 - 240, vr: 3.2, life: 1 });
+    if (rules) {
+      for (var i = 0; i < (reduced ? 3 : 8); i++) {
+        var a = i * TAU / 8;
+        ripped.push({ x: p.x + Math.cos(a) * D * k * 0.32, y: p.y + Math.sin(a) * D * k * 0.32, r: a, vx: Math.cos(a) * 100 + dirx * 45, vy: Math.sin(a) * 100 + diry * 45 - 140, vr: i % 2 ? 3 : -3, life: 1, size: D * k * (0.1 + (i % 3) * 0.025) });
+      }
+      spawnRing(p.x, p.y, D * k * 0.2, D * k * 0.6, '#A8E8FF', 3, 0.3);
+    } else {
+      ripped.push({ x: p.x, y: p.y, r: st.r - 0.5, vx: dirx * 120 + 40, vy: diry * 120 - 240, vr: 3.2, life: 1 });
+      spawnRing(p.x, p.y, D * k * 0.2, D * k * 0.6, '#FFD531', 3, 0.3);
+    }
     emit('tape');
   }
   function autoPeel(st, lx, ly) {
@@ -216,10 +289,44 @@
     dirx /= dl; diry /= dl;
     beginPeel(st, lx * 0.3, ly * 0.3, dirx, diry);
     st.auto = true;
+    var p = screenOf(st);
+    spawnRing(p.x, p.y, D * k * 0.16, D * k * 0.48, 'rgba(255,255,255,.85)', 3, 0.22);
     Snd.peelTap();
   }
   function detach(st) {
     if (st.state !== 'board') return;
+    if (rules) {
+      var result = preflight(st);
+      if (!result.ok) { st.auto = false; st.spring = true; Snd.deny(); emit('scrapbookDeny', result.reason); return; }
+      var before = ruleSnapshot(); rules = result.state;
+      rules.covers.forEach(function (cover) {
+        if (!rules.coverOpened[cover.id] || before.coverOpened[cover.id]) return;
+        lessonEvent('hidden');
+        if (!reduced) { paperMotion[cover.id] = 0; rules.coverOpening[cover.id] = true; }
+      });
+      peakReached = Math.max(peakReached, before.tray.length + result.ids.length);
+      result.ids.forEach(function (id) {
+        var s = stickers[id];
+        if (s !== st) { beginPeel(s, 0, R * 0.6, 0, -1); s.peel = DETACH; s.F.y = s.A.y - DETACH * 2 * R; }
+        s.state = 'out'; s.peeling = false; s.auto = false; s.arrived = false; s.merge = false;
+        peeled++; history.push(id); s.revealed = true;
+        if (guide && guide.id === id) guide = null;
+        var at = -1;
+        for (var ti = 0; ti < tray.length; ti++) if (tray[ti].type === s.type) at = ti;
+        if (at < 0) tray.push(s); else tray.splice(at + 1, 0, s);
+        var dp0 = screenOf(s);
+        spawnRing(dp0.x, dp0.y, D * k * 0.25, D * k * 0.65, '#FFFFFF', 4, 0.28);
+        burst(dp0.x, dp0.y, 8, null, { stars: true, speed: 0.65 });
+        if (s.key) lessonEvent('key');
+        if (s.duo != null) lessonEvent('duo');
+        if (s.mystery) lessonEvent('hidden');
+        if (s.glueLayers) lessonEvent('glue');
+        emit('peel', { id: id, type: s.type });
+        lessonEvent('core');
+      });
+      result.clears.forEach(function (type) { tray.filter(function (s) { return s.type === type && !s.merge; }).slice(0, 3).forEach(function (s) { s.merge = true; }); });
+      Snd.detach(); buzz(10); refresh(); updateDanger(); hud(); staticDirty = true; return;
+    }
     if (beltMode()) {
       if (!canAdd(st)) { st.auto = false; st.spring = true; return; }
       st.state = 'out'; st.peeling = false; st.auto = false;
@@ -254,6 +361,8 @@
     Snd.detach();
     buzz(10);
     var sp0 = screenOf(st);
+    spawnRing(sp0.x, sp0.y, D * k * 0.25, D * k * 0.65, st.gold ? '#FFC62E' : '#FFFFFF', 4, 0.28);
+    burst(sp0.x, sp0.y, st.gold ? 14 : 8, st.gold ? '#FFC62E' : null, { stars: true, speed: 0.65 });
     shockwaves.push({ x: sp0.x, y: sp0.y, r0: 8, r1: D * k * 0.65, t: 0, dur: 0.26, c: st.gold ? '#FFD531' : 'rgba(255,255,255,0.85)', w: 3.5 });
     /* Sticky Glue Twin: if this sticker is linked by elastic glue to a twin on the sheet, yank the twin along! */
     if (st.twin >= 0 && !st._twinPulled) {
@@ -307,23 +416,42 @@
   /* ---------- boosters ---------- */
   function canUndo() {
     if (!level) return false;
+    if (rules) return history.some(function (id) { return undoIds(stickers[id]).length > 0; });
     for (var i = history.length - 1; i >= 0; i--) {
       var s = stickers[history[i]];
-      if (s.state === 'tray' && !s.merge) return true;
+      if (s.state === 'tray' && !s.merge && s.duo == null && !s.key) return true;
       if (s.state === 'fly' || s.state === 'out') return false;
     }
     return false;
   }
+  function undoIds(s) {
+    if (!s || s.state !== 'tray' || s.merge || s.key) return [];
+    var ids = s.duo == null ? [s.id] : [s.id, s.duo];
+    return ids.every(function (id) { var t = stickers[id]; return t.state === 'tray' && !t.merge && !t.key; }) ? ids : [];
+  }
   var Boosters = {
     undo: function () {
+      if (rules) {
+        for (var hi = history.length - 1; hi >= 0; hi--) {
+          var ids = undoIds(stickers[history[hi]]);
+          if (!ids.length) continue;
+          ids.forEach(function (id) {
+            var t = stickers[id]; history.splice(history.indexOf(id), 1); tray.splice(tray.indexOf(t), 1); peeled--;
+            t.state = 'return'; t.flyT = 0; t.fx = t.px; t.fy = t.py; t.fs = t.scale; t.A = null; t.F = null; t.peel = 0; t.r = t.rot; rules.removed[id] = false;
+          });
+          Snd.power(); refresh(); updateDanger(); hud(); return true;
+        }
+        return false;
+      }
       for (var i = history.length - 1; i >= 0; i--) {
         var s = stickers[history[i]];
-        if (s.state === 'tray' && !s.merge) {
+        if (s.state === 'tray' && !s.merge && s.duo == null && !s.key) {
           history.splice(i, 1);
           tray.splice(tray.indexOf(s), 1);
           peeled = Math.max(0, peeled - 1);
           s.state = 'return'; s.flyT = 0; s.fx = s.px; s.fy = s.py; s.fs = s.scale;
           s.A = null; s.F = null; s.peel = 0; s.r = s.rot;
+          if (rules) rules.removed[s.id] = false;
           Snd.power();
           refresh(); updateDanger(); hud();
           return true;
@@ -378,6 +506,13 @@
       return true;
     },
     magnet: function () {
+      if (rules) {
+        if (scrapbookBusy()) return false;
+        var picks = stickers.filter(function (s) { return s.state === 'board' && preflight(s).ok; });
+        picks.sort(function (a, b) { return tray.filter(function (t) { return t.type === b.type; }).length - tray.filter(function (t) { return t.type === a.type; }).length; });
+        if (!picks.length) return false;
+        autoPeel(picks[0], 0, R * 0.6); return true;
+      }
       var counts = {}, board = stickers.filter(function (s) { return s.state === 'board' && !s.peeling; });
       if (!board.length) return false;
       tray.forEach(function (s) { if (!s.merge) counts[s.type] = (counts[s.type] || 0) + 1; });
@@ -469,6 +604,15 @@
       return true;
     },
     shuffle: function () {
+      if (rules) {
+        if (scrapbookBusy()) return false;
+        // Move whole identities; a rigid reflection preserves every overlap and key dependency.
+        stickers.forEach(function (s) { s.x = Core.BOARD_W - s.x; s.rot = -s.rot; s.r = s.rot; if (s.flap != null) s.flap = 1 - s.flap; s.pop = 1; });
+        level.stickers.forEach(function (s) { s.x = Core.BOARD_W - s.x; s.rot = -s.rot; if (s.flap != null) s.flap = 1 - s.flap; });
+        rules.covers.forEach(function (c) { c.rect.x = Core.BOARD_W - c.rect.x - c.rect.w; c.angle = -c.angle; });
+        rules.flap = 1 - rules.flap;
+        emit('flap', rules.flap); Snd.power(); refresh(); staticDirty = true; return true;
+      }
       var on = stickers.filter(function (s) { return s.state === 'board' && !s.peeling; });
       if (on.length < 2) return false;
       if (beltMode()) {
@@ -530,6 +674,15 @@
   /* ---------- update ---------- */
   function update(dt) {
     clock += dt;
+    Object.keys(paperMotion).forEach(function (id) {
+      paperMotion[id] = Math.min(1, paperMotion[id] + dt / 0.42); staticDirty = true;
+      if (paperMotion[id] >= 1) {
+        delete paperMotion[id]; delete rules.coverOpening[id];
+        rules.covers.filter(function (c) { return String(c.id) === id; }).forEach(function (c) { c.members.forEach(function (member) { rules.revealed[member] = true; stickers[member].revealed = true; stickers[member].pop = 0.6; }); });
+        refresh();
+      }
+    });
+    Object.keys(paperShake).forEach(function (id) { if (paperShake[id] > 0) { paperShake[id] = Math.max(0, paperShake[id] - dt * 3); staticDirty = true; } });
     if (state === 'won' && level.cfg.pic) picWin = Math.min(1, picWin + dt / 1.1);
     if (state === 'play') { idle += dt; if (idle > 9 && settings.idleHint && !guide) showIdleHint(); }
     if (whirl) {
@@ -580,6 +733,7 @@
       if (pt.life <= 0) particles.splice(q, 1);
     }
     for (var f = floats.length - 1; f >= 0; f--) { floats[f].t += dt; if (floats[f].t > 1) floats.splice(f, 1); }
+    for (var ri = boardRings.length - 1; ri >= 0; ri--) { boardRings[ri].t += dt; if (boardRings[ri].t >= boardRings[ri].dur) boardRings.splice(ri, 1); }
     for (var t = ripped.length - 1; t >= 0; t--) {
       var r = ripped[t];
       r.x += r.vx * dt; r.y += r.vy * dt; r.vy += 900 * dt; r.r += r.vr * dt; r.life -= dt * 1.5;
@@ -685,7 +839,9 @@
     if (s.flyT >= 1) {
       s.state = 'tray'; s.arrived = true;
       Snd.stick();
-      s.pop = 0.7;
+      s.pop = 1;
+      spawnRing(s.px, s.py, slot * 0.35, slot * 0.72, '#FFD54A', 3, 0.26);
+      burst(s.px, s.py, 6, '#FFF', { stars: true, speed: 0.45 });
       hud();
     }
   }
@@ -704,6 +860,61 @@
     }
   }
   function resolveTriples(dt) {
+    if (rules) {
+      /* A triple the open spread couldn't take yet keeps checking, so turning the page releases it. */
+      var held = {}, told = false;
+      tray.forEach(function (s) { if (!s.merge && !s.inFlight) held[s.type] = (held[s.type] || 0) + 1; });
+      Object.keys(held).forEach(function (t) {
+        if (held[t] < 3) return;
+        if (!canBurst(+t)) {
+          if (!told) { told = true; if (!resolveTriples.heldAt || clock - resolveTriples.heldAt > 5) { resolveTriples.heldAt = clock; emit('toast', { key: 'waitNextPage' }); } }
+          return;
+        }
+        var got = 0;
+        tray.forEach(function (s) { if (got < 3 && !s.merge && !s.inFlight && s.type === +t) { s.merge = true; s.mergeT = 0; got++; } });
+      });
+      var groupsR = {};
+      tray.forEach(function (s) { if (s.merge) (groupsR[s.type] = groupsR[s.type] || []).push(s); });
+      Object.keys(groupsR).forEach(function (t) {
+        var pending = groupsR[t];
+        for (var offset = 0; offset + 2 < pending.length; offset += 3) {
+          var g = pending.slice(offset, offset + 3);
+          if (!canBurst(+t)) {
+            pending.slice(offset).forEach(function (s) { s.merge = false; s.mergeT = 0; });
+            break;
+          }
+          if (!g.every(function (s) { return s.state === 'tray' && s.arrived; })) break;
+          g.forEach(function (s) { s.mergeT = (s.mergeT || 0) + dt / 0.15; });
+          var midR = g[1];
+          g.forEach(function (s) {
+            if (s === midR) return;
+            s.px += (midR.px - s.px) * Math.min(1, dt * 22);
+          });
+          if (g[0].mergeT < 1) break;
+          g.forEach(function (s) {
+            tray.splice(tray.indexOf(s), 1);
+            s.state = 'done';
+            var hi = history.indexOf(s.id);
+            if (hi >= 0) history.splice(hi, 1);
+          });
+          triplesDone++;
+          merges++; staticDirty = true; refresh();
+          combo = clock - lastClear < 7 ? combo + 1 : 1;
+          lastClear = clock;
+          if (combo > 1) comboBonus += combo * 2;
+          Snd.clear(combo);
+          buzz(24);
+          spawnRing(midR.px, midR.py, slot * 0.3, slot * 1.65, '#FFFFFF', 5.5, 0.34);
+          spawnRing(midR.px, midR.py, slot * 0.2, slot * 1.25, '#FFD54A', 4, 0.42);
+          burst(midR.px, midR.py, 36, comboColor(), { stars: true, speed: 1.15 });
+          emit('shake', { combo: combo });
+          emit('clear', { type: +t, combo: combo, x: midR.px, y: midR.py });
+          updateDanger();
+          hud();
+        }
+      });
+      return;
+    }
     /* First, check if any arrived 3-of-a-kind in the tray is blocked by a full Bookmark Pocket (or newly unblocked after page flip). */
     var byType = {};
     tray.forEach(function (s) {
@@ -774,7 +985,9 @@
         stageEl.classList.add('shake');
       }
       screenShake = Math.max(screenShake, hasHolo ? 0.55 : combo >= 2 ? 0.35 : 0.18);
-      burst(mid.px, mid.py, hasHolo ? 40 : 28, comboColor());
+      spawnRing(mid.px, mid.py, slot * 0.3, slot * 1.65, '#FFFFFF', 5.5, 0.34);
+      spawnRing(mid.px, mid.py, slot * 0.2, slot * 1.25, '#FFD54A', 4, 0.42);
+      burst(mid.px, mid.py, hasHolo ? 42 : 34, comboColor(), { stars: true, speed: 1.15 });
       shockwaves.push({ x: mid.px, y: mid.py, r0: 10, r1: slot * 1.9, t: 0, dur: 0.38, c: hasHolo ? '#FFD531' : '#FFFFFF', w: 5.5 });
       if (hasHolo || combo >= 2) {
         shockwaves.push({ x: mid.px, y: mid.py, r0: 6, r1: slot * 2.6, t: -0.05, dur: 0.46, c: hasHolo ? '#C864FF' : '#FF5A6E', w: 4 });
@@ -793,6 +1006,7 @@
       }
       floats.push({ x: mid.px, y: mid.py - 32, t: 0, text: combo >= 3 ? '🔥 FEVER x' + combo : combo > 1 ? 'COMBO x' + combo : '+1', big: combo > 1 || hasHolo });
       refresh();
+      emit('shake', { combo: combo });
       emit('clear', { type: +t, combo: combo, holo: hasHolo, x: mid.px, y: mid.py });
       updateDanger();
       hud();
@@ -800,13 +1014,17 @@
   }
   var BURST = ['#FF5A6E', '#FFD531', '#3FC1C9', '#8E63E9', '#7BD45E', '#FF9A2F'];
   function comboColor() { return null; }
-  function burst(x, y, n, color) {
+  function burst(x, y, n, color, opts) {
+    opts = opts || {};
     if (reduced) n = Math.round(n / 3);
+    var spMul = opts.speed || 1;
     for (var i = 0; i < n; i++) {
-      var a = Math.random() * TAU, sp = 90 + Math.random() * 240;
+      var a = Math.random() * TAU, sp = (90 + Math.random() * 240) * spMul;
+      var kind = opts.stars && i % 3 === 0 ? 'star' : (i % 5 === 0 ? 'circle' : 'rect');
       particles.push({
-        x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 110, life: 1, fade: 1.5 + Math.random() * 0.8,
-        c: color || BURST[i % BURST.length], s: 3 + Math.random() * 4, a: Math.random() * 6, va: (Math.random() - 0.5) * 12
+        x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 110 * spMul, life: 1, fade: 1.4 + Math.random() * 0.8,
+        c: color || BURST[i % BURST.length], s: (kind === 'star' ? 5 : 3.5) + Math.random() * 4.5, a: Math.random() * 6, va: (Math.random() - 0.5) * 12,
+        kind: kind
       });
     }
   }
@@ -845,7 +1063,7 @@
 
   /* ---------- guide hand ---------- */
   function bestMove() {
-    var avail = stickers.filter(function (s) { return s.state === 'board' && !s.blocked && !s.locked; });
+    var avail = stickers.filter(function (s) { return s.state === 'board' && !s.blocked && !s.locked && (!rules || (!scrapbookBusy() && preflight(s).ok)); });
     if (!avail.length) return null;
     if (beltMode() && cb.rank) {
       var top = null, sc = 0;
@@ -869,31 +1087,93 @@
   function spriteOf(type) { return level && level.cfg.mixed ? Art.sprite(Math.floor(type / 10), type % 10) : Art.sprite(album, type); }
   function spriteFor(s) { return spriteOf(s.type); }
   function hidden(s) { return s.mystery && !s.revealed; }
+  var mysteryBacking = null;
+  function drawHiddenFace(c, size) {
+    c.beginPath(); c.roundRect(-size * 0.4, -size * 0.4, size * 0.8, size * 0.8, size * 0.1);
+    c.fillStyle = '#F7F1E3'; c.fill(); c.strokeStyle = '#C9BEAA'; c.lineWidth = size * 0.018; c.stroke();
+    c.fillStyle = '#3B3454';
+    c.font = '800 ' + Math.round(size * 0.42) + 'px "Baloo 2","Be Vietnam Pro",system-ui,sans-serif';
+    c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('?', 0, size * 0.03);
+    c.beginPath(); c.moveTo(size * 0.21, -size * 0.39); c.lineTo(size * 0.39, -size * 0.21); c.lineTo(size * 0.21, -size * 0.21); c.closePath();
+    c.fillStyle = '#DDD3BF'; c.fill(); c.strokeStyle = '#B6A98F'; c.lineWidth = size * 0.012; c.stroke();
+  }
+  function hiddenSprite() {
+    if (mysteryBacking) return mysteryBacking;
+    var size = Art.SPR, front = document.createElement('canvas'), shadow = document.createElement('canvas');
+    front.width = front.height = shadow.width = shadow.height = size;
+    var f = front.getContext('2d'), b = shadow.getContext('2d');
+    f.translate(size / 2, size / 2); drawHiddenFace(f, size);
+    b.translate(size / 2, size / 2); b.shadowColor = 'rgba(26,18,44,.55)'; b.shadowBlur = size * 0.035; b.shadowOffsetY = size * 0.016;
+    b.beginPath(); b.roundRect(-size * 0.4, -size * 0.4, size * 0.8, size * 0.8, size * 0.1); b.fillStyle = '#F7F1E3'; b.fill();
+    mysteryBacking = { front: front, back: front, shadow: shadow, dim: front, ghost: front };
+    return mysteryBacking;
+  }
   function drawFaceAt(c, s, size) {
     var sp = spriteFor(s), hs = size / 2;
     if (hidden(s)) {
-      /* Silver Scratch-Off Foil coating! */
-      c.drawImage(sp.back, -hs, -hs, size, size);
-      c.save();
-      var fg = c.createLinearGradient(-hs, -hs, hs, hs);
-      fg.addColorStop(0, 'rgba(180,192,210,0.85)');
-      fg.addColorStop(0.35, 'rgba(248,250,255,0.95)');
-      fg.addColorStop(0.55, 'rgba(148,163,184,0.88)');
-      fg.addColorStop(0.8, 'rgba(241,245,249,0.92)');
-      fg.addColorStop(1, 'rgba(160,174,192,0.85)');
-      c.beginPath(); c.arc(0, 0, size * 0.37, 0, TAU);
-      c.fillStyle = fg; c.fill();
-      c.lineWidth = size * 0.03; c.strokeStyle = '#64748B'; c.setLineDash([4, 3]); c.stroke(); c.setLineDash([]);
-      c.fillStyle = '#334155';
-      c.font = '800 ' + Math.round(size * 0.34) + 'px "Baloo 2","Be Vietnam Pro",system-ui,sans-serif';
-      c.textAlign = 'center'; c.textBaseline = 'middle';
-      c.fillText('✦?', 0, size * 0.02);
-      c.restore();
+      if (rules) {
+        drawHiddenFace(c, size);
+      } else {
+        /* Silver Scratch-Off Foil coating! */
+        c.drawImage(sp.back, -hs, -hs, size, size);
+        c.save();
+        var fg = c.createLinearGradient(-hs, -hs, hs, hs);
+        fg.addColorStop(0, 'rgba(180,192,210,0.85)');
+        fg.addColorStop(0.35, 'rgba(248,250,255,0.95)');
+        fg.addColorStop(0.55, 'rgba(148,163,184,0.88)');
+        fg.addColorStop(0.8, 'rgba(241,245,249,0.92)');
+        fg.addColorStop(1, 'rgba(160,174,192,0.85)');
+        c.beginPath(); c.arc(0, 0, size * 0.37, 0, TAU);
+        c.fillStyle = fg; c.fill();
+        c.lineWidth = size * 0.03; c.strokeStyle = '#64748B'; c.setLineDash([4, 3]); c.stroke(); c.setLineDash([]);
+        c.fillStyle = '#334155';
+        c.font = '800 ' + Math.round(size * 0.34) + 'px "Baloo 2","Be Vietnam Pro",system-ui,sans-serif';
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillText('✦?', 0, size * 0.02);
+        c.restore();
+      }
     } else {
       c.drawImage(sp.front, -hs, -hs, size, size);
     }
   }
-  function drawTape(c, size) {
+  function drawIceCrystal(c, x, y, radius) {
+    c.beginPath();
+    for (var i = 0; i < 6; i++) {
+      var a = i * TAU / 6, dx = Math.cos(a), dy = Math.sin(a), bx = x + dx * radius * 0.55, by = y + dy * radius * 0.55;
+      c.moveTo(x, y); c.lineTo(x + dx * radius, y + dy * radius);
+      c.moveTo(bx - dy * radius * 0.24 - dx * radius * 0.2, by + dx * radius * 0.24 - dy * radius * 0.2); c.lineTo(bx, by);
+      c.lineTo(bx + dy * radius * 0.24 - dx * radius * 0.2, by - dx * radius * 0.24 - dy * radius * 0.2);
+    }
+    c.stroke();
+  }
+  function drawIceShard(c, size) {
+    c.beginPath(); c.moveTo(-size * 0.5, -size * 0.2); c.lineTo(size * 0.1, -size * 0.6); c.lineTo(size * 0.5, size * 0.12); c.lineTo(-size * 0.14, size * 0.48); c.closePath();
+    c.fillStyle = '#A8E8FF'; c.fill(); c.strokeStyle = '#F1FCFF'; c.lineWidth = Math.max(1, size * 0.08); c.stroke();
+    c.beginPath(); c.moveTo(size * 0.1, -size * 0.6); c.lineTo(-size * 0.14, size * 0.48); c.lineTo(size * 0.5, size * 0.12); c.closePath(); c.fillStyle = '#63BCEB'; c.fill();
+  }
+  function drawTape(c, size, s) {
+    if (rules) {
+      /* Faceted ice frame around the sticker when playing Scrapbook Campaign. */
+      c.save(); c.scale(size, size); c.lineJoin = 'round';
+      c.beginPath(); c.moveTo(-0.34, -0.47); c.lineTo(0.32, -0.47); c.lineTo(0.47, -0.32); c.lineTo(0.47, 0.33); c.lineTo(0.33, 0.47); c.lineTo(-0.32, 0.47); c.lineTo(-0.47, 0.32); c.lineTo(-0.47, -0.32); c.closePath();
+      c.fillStyle = 'rgba(83,192,245,.16)'; c.fill(); c.strokeStyle = '#3088C5'; c.lineWidth = 0.025; c.stroke();
+      c.beginPath(); c.moveTo(-0.34, -0.47); c.lineTo(0.32, -0.47); c.lineTo(0.38, -0.36); c.lineTo(-0.35, -0.36); c.lineTo(-0.36, 0.35); c.lineTo(-0.47, 0.32); c.lineTo(-0.47, -0.32); c.closePath();
+      c.fillStyle = 'rgba(192,241,255,.9)'; c.fill();
+      c.beginPath(); c.moveTo(0.32, -0.47); c.lineTo(0.47, -0.32); c.lineTo(0.47, 0.33); c.lineTo(0.33, 0.47); c.lineTo(-0.32, 0.47); c.lineTo(-0.47, 0.32); c.lineTo(-0.35, 0.36); c.lineTo(0.35, 0.36); c.lineTo(0.36, -0.35); c.closePath();
+      c.fillStyle = 'rgba(67,157,219,.7)'; c.fill();
+      c.beginPath(); c.moveTo(-0.32, -0.43); c.lineTo(0.3, -0.43); c.lineTo(0.42, -0.3); c.moveTo(-0.42, -0.28); c.lineTo(-0.42, 0.26); c.moveTo(-0.29, 0.41); c.lineTo(0.29, 0.41);
+      c.strokeStyle = '#EDFCFF'; c.lineWidth = 0.025; c.stroke();
+      c.fillStyle = 'rgba(237,252,255,.82)';
+      c.beginPath(); c.moveTo(-0.36, -0.36); c.lineTo(-0.18, -0.35); c.lineTo(-0.3, -0.24); c.closePath(); c.moveTo(0.36, 0.36); c.lineTo(0.18, 0.35); c.lineTo(0.31, 0.22); c.closePath(); c.fill();
+      c.strokeStyle = '#F2FDFF'; c.lineWidth = 0.018;
+      drawIceCrystal(c, -0.34, -0.31, 0.075); drawIceCrystal(c, 0.34, 0.27, 0.07);
+      if (s && (s.glueLayers || s.tape) > s.tape - merges) {
+        c.beginPath(); c.moveTo(-0.38, -0.16); c.lineTo(-0.2, -0.08); c.lineTo(-0.26, 0.07); c.lineTo(-0.1, 0.22); c.moveTo(-0.2, -0.08); c.lineTo(-0.06, -0.15); c.moveTo(0.3, -0.36); c.lineTo(0.17, -0.19); c.lineTo(0.25, -0.04); c.lineTo(0.1, 0.11);
+        c.strokeStyle = '#368DC1'; c.lineWidth = 0.035; c.stroke(); c.strokeStyle = '#F4FDFF'; c.lineWidth = 0.015; c.stroke();
+      }
+      c.restore();
+      return;
+    }
     var w = size * 0.94, h = size * 0.28;
     c.save();
     c.rotate(-0.42);
@@ -915,7 +1195,7 @@
     c.restore();
   }
   function drawBadges(c, s, size) {
-    if (s.ammo && level.cfg.beltHex) {
+    if ((!rules || !hidden(s)) && s.ammo && level.cfg.beltHex) {
       /* Conveyor mode: how many pixels this sticker paints, on a dot of its paint colour. */
       var bx = size * 0.26, by = size * 0.26, br = size * 0.2;
       c.save();
@@ -931,15 +1211,21 @@
       c.restore();
     }
     if (s.gold) {
-      var gx = size * 0.27, gy = -size * 0.27, gr = size * 0.14;
-      var hg = c.createLinearGradient(gx - gr, gy - gr, gx + gr, gy + gr);
-      hg.addColorStop(0, '#FF5A6E'); hg.addColorStop(0.5, '#FFD531'); hg.addColorStop(1, '#3FC1C9');
-      c.beginPath(); c.arc(gx, gy, gr, 0, TAU); c.fillStyle = hg; c.fill();
-      c.lineWidth = size * 0.03; c.strokeStyle = '#FFF'; c.stroke();
-      c.fillStyle = '#2A2438';
-      c.font = '800 ' + Math.round(size * 0.16) + 'px "Baloo 2",system-ui,sans-serif';
-      c.textAlign = 'center'; c.textBaseline = 'middle';
-      c.fillText('★', gx, gy + size * 0.01);
+      var gx = size * 0.27, gy = -size * 0.27, gr = rules ? size * 0.13 : size * 0.14;
+      if (rules) {
+        c.beginPath(); c.arc(gx, gy, gr, 0, TAU); c.fillStyle = '#FFC62E'; c.fill();
+        c.lineWidth = size * 0.03; c.strokeStyle = '#2A2438'; c.stroke();
+        c.beginPath(); c.arc(gx, gy, gr * 0.52, 0, TAU); c.strokeStyle = '#B9820F'; c.lineWidth = size * 0.02; c.stroke();
+      } else {
+        var hg = c.createLinearGradient(gx - gr, gy - gr, gx + gr, gy + gr);
+        hg.addColorStop(0, '#FF5A6E'); hg.addColorStop(0.5, '#FFD531'); hg.addColorStop(1, '#3FC1C9');
+        c.beginPath(); c.arc(gx, gy, gr, 0, TAU); c.fillStyle = hg; c.fill();
+        c.lineWidth = size * 0.03; c.strokeStyle = '#FFF'; c.stroke();
+        c.fillStyle = '#2A2438';
+        c.font = '800 ' + Math.round(size * 0.16) + 'px "Baloo 2",system-ui,sans-serif';
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillText('★', gx, gy + size * 0.01);
+      }
     }
     if (s.twin >= 0 && stickers[s.twin] && onSheet(stickers[s.twin])) {
       var tx = -size * 0.27, ty = -size * 0.27, tr2 = size * 0.13;
@@ -951,14 +1237,25 @@
       c.fillText('2x', tx, ty + size * 0.01);
     }
     if (s.tape) {
-      /* Trays still to finish before the tape comes off, on a badge in the middle of the tape. */
-      var tr = size * 0.17, remTape = Math.max(1, s.tape - merges);
-      c.beginPath(); c.arc(0, 0, tr, 0, TAU); c.fillStyle = '#2A2438'; c.fill();
-      c.lineWidth = size * 0.025; c.strokeStyle = '#FFD654'; c.stroke();
-      c.fillStyle = '#FFF';
-      c.font = '800 ' + Math.round(size * 0.22) + 'px "Baloo 2",system-ui,sans-serif';
-      c.textAlign = 'center'; c.textBaseline = 'middle';
-      c.fillText(String(remTape), 0, size * 0.015);
+      if (rules) {
+        var bw = size * 0.48, bh = size * 0.27, bxR = size * 0.16, byR = size * 0.33;
+        c.save(); c.rotate(hidden(s) ? 0 : -s.r);
+        c.beginPath(); c.roundRect(bxR - bw / 2, byR - bh / 2, bw, bh, size * 0.075); c.fillStyle = '#125B91'; c.fill();
+        c.lineWidth = size * 0.022; c.strokeStyle = '#DFF8FF'; c.stroke();
+        c.strokeStyle = '#EAFBFF'; c.lineWidth = size * 0.015; drawIceCrystal(c, bxR - size * 0.13, byR, size * 0.068);
+        c.fillStyle = '#FFF'; c.font = '800 ' + Math.round(size * 0.21) + 'px "Baloo 2",system-ui,sans-serif';
+        c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(String(Math.max(0, s.tape - merges)), bxR + size * 0.075, byR + size * 0.012);
+        c.restore();
+      } else {
+        /* Trays still to finish before the tape comes off, on a badge in the middle of the tape. */
+        var tr = size * 0.17, remTape = Math.max(1, s.tape - merges);
+        c.beginPath(); c.arc(0, 0, tr, 0, TAU); c.fillStyle = '#2A2438'; c.fill();
+        c.lineWidth = size * 0.025; c.strokeStyle = '#FFD654'; c.stroke();
+        c.fillStyle = '#FFF';
+        c.font = '800 ' + Math.round(size * 0.22) + 'px "Baloo 2",system-ui,sans-serif';
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillText(String(remTape), 0, size * 0.015);
+      }
     }
     if (s.lock && s.locked) {
       var r = size * 0.2, n = Math.max(1, s.lock - peeled);
@@ -969,9 +1266,15 @@
       c.textAlign = 'center'; c.textBaseline = 'middle';
       c.fillText(String(n), 0, size * 0.015);
     }
+    if (s.key || s.group) {
+      c.fillStyle = s.key ? '#FFE7A0' : '#D9BDEB'; c.strokeStyle = '#583674'; c.lineWidth = size * 0.025;
+      c.beginPath(); c.roundRect(-size * 0.37, -size * 0.38, size * 0.4, size * 0.25, size * 0.04); c.fill(); c.stroke();
+      c.fillStyle = '#45265A'; c.font = 'bold ' + Math.round(size * 0.15) + 'px system-ui'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText((s.key ? '⚿ ' : '⌑ ') + (s.key || s.group), -size * 0.17, -size * 0.25);
+    }
+    if (s.duo != null) { c.fillStyle = '#247F7C'; c.font = 'bold ' + Math.round(size * 0.18) + 'px system-ui'; c.textAlign = 'center'; c.fillText('2↔', 0, size * 0.34); }
   }
   function drawBoardSticker(c, s) {
-    var p = screenOf(s), size = D * k, sp = spriteFor(s), hs = size / 2;
+    var p = screenOf(s), size = D * k, concealed = !!(rules && hidden(s)), sp = concealed ? hiddenSprite() : spriteFor(s), hs = size / 2;
     var off = s.shake > 0 && !reduced ? Math.sin(s.shake * 34) * 4.5 * s.shake : 0;
     var t = s.spawn <= 0 ? 0 : s.spawn;
     if (t <= 0) return;
@@ -990,14 +1293,14 @@
     c.save();
     c.globalAlpha = t >= 1 ? 1 : ease(t);
     c.translate(p.x + off, p.y);
-    c.rotate(s.r + tilt);
+    c.rotate((concealed ? 0 : s.r) + tilt);
     c.scale(drop * pop * swap * lift * (Math.abs(flip) < 0.15 ? 0.15 : flip), drop * pop * lift);
     c.drawImage(sp.shadow, -hs, -hs, size, size);
     drawFaceAt(c, s, size);
-    if (s.tape) drawTape(c, size);
+    if (s.tape) drawTape(c, size, s);
     drawBadges(c, s, size);
-    /* The tape itself says "not yet", so a taped sticker on top keeps its colours. */
-    if (s.blocked || (s.locked && !s.tape)) {
+    /* The tape / ice itself says "not yet", so a locked sticker on top keeps its colours. Mystery in Scrapbook keeps parchment look. */
+    if (!concealed && (s.blocked || (s.locked && !s.tape))) {
       c.globalAlpha = (t >= 1 ? 1 : ease(t)) * (s.blocked ? 0.44 : 0.22);
       c.drawImage(sp.dim, -hs, -hs, size, size);
     }
@@ -1127,12 +1430,65 @@
       }
     }
   }
+  function drawScrapbookLinks(c) {
+    if (!rules) return;
+    var groups = {};
+    stickers.forEach(function (s) {
+      if (s.state !== 'board' || paperForTile(s.id)) return;
+      var p = screenOf(s);
+      if (s.group && !rules.opened[s.group]) (groups[s.group] || (groups[s.group] = [])).push(p);
+      if (s.duo == null || s.id > s.duo || stickers[s.duo].state !== 'board' || paperForTile(s.duo)) return;
+      var mate = screenOf(stickers[s.duo]); c.save();
+      c.strokeStyle = '#D4F2EB'; c.lineWidth = D * k * 0.58; c.lineCap = 'round'; c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(mate.x, mate.y); c.stroke();
+      c.strokeStyle = '#3D9E94'; c.lineWidth = 2; c.setLineDash([4, 3]); c.stroke(); c.restore();
+    });
+    Object.keys(groups).forEach(function (glyph) {
+      var pts = groups[glyph], pad = D * k * 0.45, x0 = Math.min.apply(null, pts.map(function (p) { return p.x; })) - pad, x1 = Math.max.apply(null, pts.map(function (p) { return p.x; })) + pad;
+      var y0 = Math.min.apply(null, pts.map(function (p) { return p.y; })) - pad, y1 = Math.max.apply(null, pts.map(function (p) { return p.y; })) + pad;
+      c.save(); c.strokeStyle = '#9A68AD'; c.lineWidth = 5; c.setLineDash([12, 5]); c.beginPath(); c.roundRect(x0, y0, x1 - x0, y1 - y0, 15); c.stroke(); c.restore();
+    });
+  }
+  function drawFlap(c) {
+    if (!rules || !level.cfg.scrapbook.flap) return;
+    var edge = ox + Core.BOARD_W / 2 * k, bounds = Core.flapBounds(paperR, edge, rules.flap), x = bounds.x, right = bounds.x + bounds.w, y = bounds.y, h = bounds.h;
+    c.save(); c.shadowColor = 'rgba(45,30,30,.3)'; c.shadowBlur = 8; c.shadowOffsetX = rules.flap ? -4 : 4;
+    c.fillStyle = '#F3E8CC'; c.beginPath(); c.roundRect(x, y, right - x, h, 7); c.fill(); c.shadowBlur = 0; c.shadowOffsetX = 0;
+    c.strokeStyle = '#C4A982'; c.lineWidth = 2; c.setLineDash([5, 4]); c.beginPath(); c.moveTo(edge, y + 5); c.lineTo(edge, y + h - 5); c.stroke(); c.setLineDash([]);
+    var fold = rules.flap ? x : right - 24; c.beginPath(); c.moveTo(fold, y); c.lineTo(fold + 24, y + 24); c.lineTo(fold, y + 24); c.closePath(); c.fillStyle = '#D9C69F'; c.fill();
+    c.fillStyle = '#846B49'; c.font = 'bold 13px system-ui'; c.textAlign = 'center'; c.fillText('GIẤY GẤP · ' + (rules.flap ? 'B' : 'A'), (x + right) / 2, y + h * 0.47); c.font = '12px system-ui'; c.fillText('Lật giấy (F)', (x + right) / 2, y + h * 0.47 + 22); c.restore();
+  }
+  function drawMysteryPapers(c) {
+    if (!rules) return;
+    rules.covers.forEach(function (cover) {
+      var progress = paperMotion[cover.id];
+      if (rules.coverOpened[cover.id] && progress == null) return;
+      var r = cover.rect, t = progress == null ? 0 : ease(progress), shake = reduced ? 0 : Math.sin((paperShake[cover.id] || 0) * 34) * (paperShake[cover.id] || 0) * 4;
+      c.save(); c.translate(ox + (r.x + r.w / 2) * k + shake + t * 85 * k, oy + (r.y + r.h / 2) * k - t * 120 * k);
+      c.rotate((cover.angle || 0) - t * 0.22); c.scale(k, k * (1 - t * 0.78)); c.globalAlpha = 1 - t * t;
+      c.shadowColor = 'rgba(50,32,79,.3)'; c.shadowBlur = 7 * k; c.shadowOffsetY = 4 * k;
+      c.fillStyle = '#D7C8EF'; c.beginPath(); c.roundRect(-r.w / 2, -r.h / 2, r.w, r.h, 4); c.fill();
+      c.shadowBlur = 0; c.shadowOffsetY = 0; c.strokeStyle = paperHover === cover.id ? '#7955A2' : '#B59ACF'; c.lineWidth = paperHover === cover.id ? 2.5 : 1; c.stroke();
+      c.fillStyle = '#F1DFB1'; c.save(); c.translate(-r.w * 0.27, -r.h / 2 + 2); c.rotate(-0.2); c.fillRect(-23, -8, 46, 16); c.restore();
+      c.fillStyle = '#ECE3FA'; c.beginPath(); c.moveTo(r.w / 2 - 24, r.h / 2); c.lineTo(r.w / 2, r.h / 2 - 24 - t * 34); c.lineTo(r.w / 2, r.h / 2); c.closePath(); c.fill();
+      c.strokeStyle = '#B69DCF'; c.lineWidth = 1.4;
+      for (var line = 0; line < 4; line++) { var y = -25 + line * 21; c.beginPath(); c.moveTo(-r.w * 0.3, y); c.lineTo(r.w * (line === 3 ? 0.12 : 0.3), y); c.stroke(); }
+      c.fillStyle = '#614C7E'; c.font = 'bold 11px system-ui'; c.textAlign = 'center'; c.fillText('Bóc sticker giữ mép', 0, r.h / 2 - 28);
+      c.restore();
+    });
+  }
   function buildStatic() {
     staticDirty = false;
     sx.setTransform(dpr, 0, 0, dpr, 0, 0);
     sx.clearRect(0, 0, W, H);
     drawSheet(sx);
-    stickers.forEach(function (s) { if (s.state === 'board' && !s.peeling) drawBoardSticker(sx, s); });
+    drawScrapbookLinks(sx);
+    stickers.forEach(function (s) {
+      var cover = paperForTile(s.id), holder = rules && rules.covers.some(function (c) { return !rules.coverOpened[c.id] && c.holders.indexOf(s.id) >= 0; });
+      if (s.state === 'board' && !s.peeling && !holder && (!cover || rules.coverOpened[cover.id])) drawBoardSticker(sx, s);
+    });
+    drawMysteryPapers(sx);
+    if (rules) rules.covers.forEach(function (cover) { if (!rules.coverOpened[cover.id]) cover.holders.forEach(function (id) { var s = stickers[id]; if (s.state === 'board' && !s.peeling) drawBoardSticker(sx, s); }); });
+    drawFlap(sx);
     if (!beltMode()) drawTrayBase(sx);
   }
   /* Tint a sprite along the fold so the crease reads as a soft bend. */
@@ -1159,24 +1515,25 @@
   }
   /* The real fold: the crease is the perpendicular bisector of the lifted edge and the finger. */
   function drawPeeling(s) {
-    var p = screenOf(s), sp = spriteFor(s), hs = D / 2;
+    var p = screenOf(s), concealed = !!(rules && hidden(s)), sp = concealed ? hiddenSprite() : spriteFor(s), hs = D / 2;
     var ax = s.A.x, ay = s.A.y, fx = s.F.x, fy = s.F.y, dx = ax - fx, dy = ay - fy;
     var len = Math.sqrt(dx * dx + dy * dy) || 1, nx = dx / len, ny = dy / len;
     var sv = ((ax + fx) * nx + (ay + fy) * ny) / 2;
     var off = s.shake > 0 && !reduced ? Math.sin(s.shake * 34) * 4 * s.shake : 0;
     ctx.save();
     var lift = 1 + Math.min(1, s.peel * 2) * 0.1;
-    ctx.translate(p.x + off, p.y); ctx.rotate(s.r); ctx.scale(k * lift, k * lift);
+    ctx.translate(p.x + off, p.y); ctx.rotate(concealed ? 0 : s.r); ctx.scale(k * lift, k * lift);
     /* The part still stuck down. */
     ctx.save();
     halfClip(ctx, nx, ny, sv, -1);
     ctx.drawImage(sp.shadow, -hs, -hs, D, D);
-    if (hidden(s)) drawFaceAt(ctx, s, D);
+    if (concealed) drawHiddenFace(ctx, D);
+    else if (hidden(s)) drawFaceAt(ctx, s, D);
     else {
       var stuck = shaded(tb, tmpB, sp.front, -nx, -ny, -sv, 18, [[0, 'rgba(20,14,40,.34)'], [1, 'rgba(20,14,40,0)']]);
       ctx.drawImage(stuck, -hs, -hs, D, D);
     }
-    if (s.tape) drawTape(ctx, D);
+    if (s.tape) drawTape(ctx, D, s);
     ctx.restore();
     /* The flap: the peeled region mirrored across the crease, showing the white back. */
     ctx.save();
@@ -1190,30 +1547,40 @@
     ctx.restore();
   }
   function drawFlying(s) {
-    var sp = spriteFor(s), size = D * s.scale, t = s.state === 'fly' ? Math.max(0, Math.min(1, s.flyT)) : 1;
+    var concealed = !!(rules && hidden(s)), sp = concealed ? hiddenSprite() : spriteFor(s), size = D * s.scale, t = s.state === 'fly' ? Math.max(0, Math.min(1, s.flyT)) : 1;
     var extra = s.state === 'tray' && s.pop > 0 ? 1 + Math.sin(s.pop * 3.14) * 0.14 : 1;
     var off = s.shake > 0 && !reduced ? Math.sin(s.shake * 34) * 3 * s.shake : 0;
     var flip = s.state === 'fly' ? Math.abs(Math.cos(t * Math.PI)) : 1;
     var liftY = 0, tilt = 0, m = 1;
     if (s.merge && s.mergeT) {
       var mt = Math.min(1, s.mergeT);
-      liftY = -Math.sin(mt * Math.PI) * 14;
-      m = 1 + Math.sin(mt * Math.PI) * 0.26;
-      tilt = (s.mergeSide || 0) * Math.sin(mt * Math.PI) * 0.22;
-      /* Golden convergence glow around each merging item in the tray */
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(s.px + off, s.py + liftY, size * 0.48 * m, 0, TAU);
-      ctx.fillStyle = 'rgba(255, 213, 49, ' + (0.28 + 0.35 * mt) + ')';
-      ctx.fill();
-      ctx.lineWidth = 2.5;
-      ctx.strokeStyle = 'rgba(255, 255, 255, ' + (0.5 + 0.5 * mt) + ')';
-      ctx.stroke();
-      ctx.restore();
+      if (rules) {
+        liftY = -mt * 14;
+        m = 1 + mt * 0.56;
+        var mg = ctx.createRadialGradient(s.px + off, s.py + liftY, size * 0.08, s.px + off, s.py + liftY, size * 1.05);
+        mg.addColorStop(0, 'rgba(255,248,210,' + (0.8 * mt) + ')');
+        mg.addColorStop(0.5, 'rgba(255,214,84,' + (0.55 * mt) + ')');
+        mg.addColorStop(1, 'rgba(255,214,84,0)');
+        ctx.save(); ctx.fillStyle = mg; ctx.fillRect(s.px + off - size * 1.2, s.py + liftY - size * 1.2, size * 2.4, size * 2.4); ctx.restore();
+      } else {
+        liftY = -Math.sin(mt * Math.PI) * 14;
+        m = 1 + Math.sin(mt * Math.PI) * 0.26;
+        tilt = (s.mergeSide || 0) * Math.sin(mt * Math.PI) * 0.22;
+        /* Golden convergence glow around each merging item in the tray */
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(s.px + off, s.py + liftY, size * 0.48 * m, 0, TAU);
+        ctx.fillStyle = 'rgba(255, 213, 49, ' + (0.28 + 0.35 * mt) + ')';
+        ctx.fill();
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = 'rgba(255, 255, 255, ' + (0.5 + 0.5 * mt) + ')';
+        ctx.stroke();
+        ctx.restore();
+      }
     }
     ctx.save();
     ctx.translate(s.px + off, s.py + liftY);
-    ctx.rotate(s.r + tilt);
+    ctx.rotate((concealed ? 0 : s.r) + tilt);
     ctx.scale(extra * m * Math.max(0.06, flip), extra * m);
     if (s.mergeBlocked && s.state === 'tray') {
       var bp = 0.55 + 0.45 * Math.sin(clock * 12);
@@ -1230,7 +1597,18 @@
     ctx.drawImage(sp.shadow, -size / 2, -size / 2, size, size);
     if (s.state === 'fly' && t < 0.5) ctx.drawImage(sp.back, -size / 2, -size / 2, size, size);
     else ctx.drawImage(sp.front, -size / 2, -size / 2, size, size);
-    if (s.mergeBlocked && s.state === 'tray') {
+    if (rules && !concealed && s.state === 'tray' && !s.merge && heldTypes[s.type] && !canBurst(s.type)) {
+      ctx.globalAlpha = 0.4;
+      ctx.drawImage(sp.dim, -size / 2, -size / 2, size, size);
+      ctx.globalAlpha = 1;
+      var bw = size * 0.62, bh = size * 0.3;
+      ctx.fillStyle = 'rgba(42,36,56,.92)';
+      ctx.beginPath(); ctx.roundRect(-bw / 2, -bh / 2, bw, bh, bh / 2); ctx.fill();
+      ctx.fillStyle = '#FFD654';
+      ctx.font = '800 ' + Math.round(size * 0.18) + 'px "Baloo 2",system-ui,sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('»»', 0, size * 0.012);
+    } else if (s.mergeBlocked && s.state === 'tray') {
       ctx.fillStyle = '#E11D48';
       ctx.beginPath();
       ctx.roundRect(-size * 0.36, size * 0.18, size * 0.72, size * 0.24, 5);
@@ -1322,6 +1700,14 @@
     ctx.drawImage(staticLayer, 0, 0);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.translate(shX, shY);
+    if (rules) {
+      var focus = drag ? drag.st : stickers[kbSel];
+      if (focus && focus.state === 'board' && !paperForTile(focus.id) && !(focus.flap != null && focus.flap === rules.flap) && focus.duo != null) {
+        var fp = screenOf(focus);
+        ctx.fillStyle = '#164F4B'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
+        ctx.fillText('2 ô trống · ' + Math.max(0, cap - logicalTray()) + ' còn lại', fp.x, fp.y - D * k * 0.53);
+      }
+    }
     /* Fever Mode rainbow aura around the tray & sheet */
     if (fever && state === 'play' && !reduced) {
       var fTotal = cap * slot + (cap - 1) * trayGap, fPulse = 0.55 + Math.sin(clock * 12) * 0.3;
@@ -1391,12 +1777,18 @@
       ctx.beginPath(); ctx.roundRect((W - total) / 2 - 8, trayY, total + 16, slot + 16, 14);
       ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(240,58,70,' + a + ')'; ctx.stroke();
     }
-    if (kbSel >= 0 && stickers[kbSel] && stickers[kbSel].state === 'board') {
+    if (!rules && kbSel >= 0 && stickers[kbSel] && stickers[kbSel].state === 'board') {
       var kp = screenOf(stickers[kbSel]);
       ctx.beginPath(); ctx.arc(kp.x, kp.y, S * k * 0.62, 0, TAU);
       ctx.lineWidth = 3; ctx.strokeStyle = '#2D4BD8'; ctx.stroke();
     }
     stickers.forEach(function (s) { if ((s.state === 'board' && s.peeling) || s.state === 'out') drawPeeling(s); });
+    heldTypes = {};
+    if (rules) {
+      var htCounts = {};
+      tray.forEach(function (s) { if (!s.merge) htCounts[s.type] = (htCounts[s.type] || 0) + 1; });
+      Object.keys(htCounts).forEach(function (t) { if (htCounts[t] >= 3) heldTypes[t] = 1; });
+    }
     tray.forEach(function (s) { if (s.state === 'tray') drawFlying(s); });
     stickers.forEach(function (s) { if (s.state === 'fly' && s.flyT > 0 || s.state === 'return') drawFlying(s); });
     /* Paper Vacuum / Magic Peel Vortex */
@@ -1446,19 +1838,39 @@
     });
     ripped.forEach(function (r) {
       ctx.save(); ctx.globalAlpha = Math.max(0, r.life); ctx.translate(r.x, r.y); ctx.rotate(r.r);
-      drawTape(ctx, D * k);
+      if (r.size) drawIceShard(ctx, r.size);
+      else drawTape(ctx, D * k);
+      ctx.restore();
+    });
+    boardRings.forEach(function (r) {
+      var rp = Math.min(1, r.t / r.dur), rad = r.r0 + (r.r1 - r.r0) * ease(rp);
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - rp);
+      ctx.beginPath(); ctx.arc(r.x, r.y, rad, 0, TAU);
+      ctx.lineWidth = Math.max(0.5, r.w * (1 - rp)); ctx.strokeStyle = r.c; ctx.stroke();
       ctx.restore();
     });
     particles.forEach(function (p) {
       ctx.save(); ctx.globalAlpha = Math.max(0, Math.min(1, p.life * 1.4)); ctx.translate(p.x, p.y); ctx.rotate(p.a);
-      ctx.fillStyle = p.c; ctx.fillRect(-p.s / 2, -p.s * 0.8, p.s, p.s * 1.6);
+      ctx.fillStyle = p.c;
+      if (p.kind === 'star') {
+        var r = p.s * 0.9, ir = r * 0.34;
+        ctx.beginPath();
+        ctx.moveTo(0, -r); ctx.lineTo(ir, -ir); ctx.lineTo(r, 0); ctx.lineTo(ir, ir);
+        ctx.lineTo(0, r); ctx.lineTo(-ir, ir); ctx.lineTo(-r, 0); ctx.lineTo(-ir, -ir);
+        ctx.closePath(); ctx.fill();
+      } else if (p.kind === 'circle') {
+        ctx.beginPath(); ctx.arc(0, 0, p.s * 0.5, 0, TAU); ctx.fill();
+      } else {
+        ctx.fillRect(-p.s / 2, -p.s * 0.8, p.s, p.s * 1.6);
+      }
       ctx.restore();
     });
     floats.forEach(function (f) {
       var e = ease(Math.min(1, f.t));
       ctx.save();
       ctx.globalAlpha = 1 - f.t * f.t;
-      ctx.font = '800 ' + (f.big ? 28 : 22) + 'px "Baloo 2",system-ui,sans-serif';
+      ctx.font = '800 ' + (f.big ? 32 : 24) + 'px "Baloo 2",system-ui,sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.lineWidth = 6; ctx.lineJoin = 'round'; ctx.strokeStyle = '#2A2438'; ctx.strokeText(f.text, f.x, f.y - e * 36);
       ctx.fillStyle = f.big ? '#FFC62E' : '#FFF'; ctx.fillText(f.text, f.x, f.y - e * 36);
@@ -1482,9 +1894,13 @@
     ctx.fillStyle = '#FFFDF6'; ctx.fill();
     ctx.shadowColor = 'transparent';
     ctx.lineWidth = 3; ctx.strokeStyle = '#A8733E'; ctx.stroke();
-    var sp = spriteFor(st), size = r * 1.9 / Art.ART * 0.72;
+    var size = r * 1.9 / Art.ART * 0.72;
     ctx.translate(bx, by);
-    ctx.drawImage(hidden(st) ? sp.back : sp.front, -size / 2, -size / 2, size, size);
+    if (rules) drawFaceAt(ctx, st, size);
+    else {
+      var sp = spriteFor(st);
+      ctx.drawImage(hidden(st) ? sp.back : sp.front, -size / 2, -size / 2, size, size);
+    }
     if (st.peel > 0.05) {
       /* Progress ring: how close the sticker is to coming off. */
       ctx.beginPath(); ctx.arc(0, 0, r - 4, -Math.PI / 2, -Math.PI / 2 + TAU * Math.min(1, st.peel / DETACH));
@@ -1511,6 +1927,8 @@
     return { x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height) };
   }
   function hitTest(px, py) {
+    if (rules && level.cfg.scrapbook.flap && Core.flapCoversPoint(paperR, ox + Core.BOARD_W / 2 * k, rules.flap, ox + px * k, oy + py * k)) return null;
+    if (paperHit(px, py)) return null;
     var top = null, topFree = null;
     for (var i = stickers.length - 1; i >= 0; i--) {
       var s = stickers[i];
@@ -1533,11 +1951,15 @@
   }
   function onDown(e) {
     if (!e.isPrimary || state !== 'play' || drag || clock < hold) return;
+    if (rules && scrapbookBusy()) return;
     Snd.unlock();
     idle = 0;
     if (guide && guide.idle) guide = null;
-    var p = toSheet(e), st = hitTest(p.x, p.y);
+    var p = toSheet(e), coveredPaper = paperHit(p.x, p.y);
+    if (coveredPaper) { denyPaper(coveredPaper); kbSel = -1; return; }
+    var st = hitTest(p.x, p.y);
     if (!st) return;
+    kbSel = st.id;
     if (st.blocked || st.locked) { denyWhy(st); return; }
     drag = { st: st, sx: p.x, sy: p.y, id: e.pointerId, t0: performance.now(), lastX: p.x, lastY: p.y, lastT: performance.now(), started: false,
       touch: e.pointerType !== 'mouse', screen: toCanvas(e) };
@@ -1547,11 +1969,18 @@
     e.preventDefault();
   }
   function onMove(e) {
+    if (!drag && rules && e.pointerType === 'mouse') {
+      var point = toSheet(e), hoveredPaper = paperHit(point.x, point.y), hovered = hoveredPaper ? null : hitTest(point.x, point.y);
+      var nextHover = hoveredPaper ? hoveredPaper.id : -1;
+      if (nextHover !== paperHover) { paperHover = nextHover; staticDirty = true; }
+      canvas.style.cursor = hoveredPaper ? 'not-allowed' : hovered ? 'grab' : '';
+      kbSel = hovered ? hovered.id : -1; return;
+    }
     if (!drag || e.pointerId !== drag.id) return;
     var p = toSheet(e), st = drag.st, wx = p.x - drag.sx, wy = p.y - drag.sy, dist = Math.sqrt(wx * wx + wy * wy);
     drag.screen = toCanvas(e);
     if (!drag.started) {
-      if (dist < 6) return;
+      if (dist < (rules ? 18 : 6)) return;
       if (!canAdd(st)) { drag = null; canvas.style.cursor = ''; return; }
       var c0 = toLocal(st, drag.sx - st.x, drag.sy - st.y), d0 = toLocal(st, wx / dist, wy / dist);
       beginPeel(st, c0.x, c0.y, d0.x, d0.y);
@@ -1603,6 +2032,8 @@
   /* Keyboard play: arrow keys move between free stickers, Enter or Space peels. */
   function onKey(e) {
     if (state !== 'play') return;
+    if (e.key.toLowerCase() === 'f' && rules && level.cfg.scrapbook.flap) { e.preventDefault(); toggleFlap(); return; }
+    if (rules && scrapbookBusy()) return;
     var free = stickers.filter(function (s) { return s.state === 'board' && !s.blocked && !s.locked && !s.peeling; });
     if (!free.length) return;
     var dirs = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }, dir = dirs[e.key];
@@ -1633,6 +2064,7 @@
     canvas.addEventListener('keydown', onKey);
     if (root.ResizeObserver) new ResizeObserver(function () { if (state !== 'idle') layout(); }).observe(stageEl);
     else root.addEventListener('resize', function () { if (state !== 'idle') layout(); });
+    root.addEventListener('stickerartready', function () { staticDirty = true; });
   }
   /* Magnet, second half: the stickers leave the sheet one by one and fly to the page's tray. */
   function takeStickers(ids) {
@@ -1654,8 +2086,8 @@
   PO.Game = {
     bind: bind, start: start, stop: stop, setPaused: setPaused, useBooster: useBooster, configure: configure,
     continueWithSlots: continueWithSlots, canUndo: canUndo,
-    /* The types in the tray now, not counting a triple already bursting. */
-    trayTypes: function () { return tray.filter(function (s) { return !s.merge; }).map(function (s) { return s.type; }); },
+    /* Default consumers see available copies; the book also sees the third copy while its triple merges. */
+    trayTypes: function (includeMerging) { return tray.filter(function (s) { return includeMerging || !s.merge; }).map(function (s) { return s.type; }); },
     /* Conveyor mode: the page decides the end of a level and can resume after a continue. */
     end: function (won) {
       if (state !== 'play') return;
@@ -1666,12 +2098,18 @@
     refreshHint: function () { if (guide && guide.idle) guide = null; },
     /* Stickers the player can peel right now (uncovered, unlocked), for the page's own rules. */
     freeStickers: function (all) {
-      return stickers.filter(function (s) { return s.state === 'board' && !s.peeling && (all || (!s.blocked && !s.locked)); }).map(function (s) { return { id: s.id, type: s.type }; });
+      return stickers.filter(function (s) { return s.state === 'board' && !s.peeling && !paperForTile(s.id) && (all || (!s.blocked && !s.locked)); }).map(function (s) { return { id: s.id, type: s.type }; });
     },
     boardLeft: function () { return stickers.filter(function (s) { return s.state === 'board' || s.state === 'out'; }).length; },
     /* Magnet in sink mode: lifts these stickers off the sheet wherever they are and hands them to the page. */
     pull: function (ids) {
       if (state !== 'play') return false;
+      if (rules) {
+        if (!ids.length || scrapbookBusy()) return false;
+        var st = stickers[ids[0]], check = st && preflight(st);
+        if (!check || !check.ok || check.ids.length !== ids.length || !check.ids.every(function (id) { return ids.indexOf(id) >= 0; })) return false;
+        autoPeel(st, 0, R * 0.6); return true;
+      }
       if (reduced) { takeStickers(ids); return true; }
       /* Lock taps, light the targets up through the layers and let them tremble before they let go. */
       hold = clock + 0.45 + ids.length * 0.12 + 0.2;
@@ -1682,10 +2120,18 @@
     },
     hasProgress: function () { return peeled > 0; },
     /* True while a helper animation plays (shuffle whirl, magnet pull): the page holds other helpers and its loss check. */
-    busy: function () { return clock < hold; },
+    busy: function () { return clock < hold || !!(rules && scrapbookBusy()); },
     canAddSlot: function () { return cap < Core.MAX_CAP; },
     /* Conveyor mode: the page finished a tray, which loosens tape. */
     merge: function () { merges++; staticDirty = true; refresh(); },
+    toggleFlap: toggleFlap,
+    teach: function (kind) {
+      if (!rules) return;
+      var tile = stickers.filter(function (s) { return kind === 'core' ? s.id === level.solution[0] : kind === 'glue' ? s.tape && !paperForTile(s.id) : kind === 'hidden' ? rules.covers.some(function (c) { return c.holders.indexOf(s.id) >= 0; }) : kind === 'key' ? s.key : kind === 'duo' ? s.duo != null && !paperForTile(s.id) : s.flap != null; })[0];
+      lesson = { kind: kind, id: tile ? tile.id : -1 }; if (tile) { tile.pop = 1; kbSel = tile.id; } staticDirty = true;
+    },
+    witness: function () { return level && level.witness; },
+    rules: function () { return rules && ruleSnapshot(); },
     /* Demo helper: fills the tray to 6/7 slots with non-matching stickers so the presenter can demo Vacuum / Wand rescue! */
     triggerDemoPinch: function () {
       if (state !== 'play') return false;
@@ -1752,6 +2198,16 @@
     /* Test hook: peel the next sticker from the level's proof order. */
     debugStep: function () {
       if (state !== 'play') return state;
+      if (rules) {
+        if (scrapbookBusy()) return 'wait';
+        var action = Core.nextWitnessAction(level, ruleSnapshot());
+        if (!action) return null;
+        if (action.type === 'toggle') return toggleFlap() ? 'toggle' : 'wait';
+        var tile = stickers[action.id];
+        if (tile.state !== 'board') return 'wait';
+        if (!canAdd(tile)) return 'wait';
+        autoPeel(tile, R * 0.6, R * 0.6); return tile.id;
+      }
       var sol = level.solution;
       for (var i = 0; i < sol.length; i++) {
         var s = stickers[sol[i]];
@@ -1768,7 +2224,10 @@
     debugState: function () {
       return {
         state: state, tray: logicalTray(), cap: cap, peak: peakReached, peeled: peeled, left: stickers.filter(onSheet).length, triples: triplesDone,
-        animating: clock < hold || stickers.some(function (s) { return s.peeling || s.state === 'out' || s.state === 'fly' || s.state === 'return'; })
+        animating: clock < hold || stickers.some(function (s) { return s.peeling || s.state === 'out' || s.state === 'fly' || s.state === 'return'; }),
+        flapSide: rules && rules.flap, busy: rules && scrapbookBusy(),
+        next: rules && Core.nextWitnessAction(level, ruleSnapshot()),
+        legal: rules ? stickers.filter(function (s) { return s.state === 'board' && !scrapbookBusy() && preflight(s).ok; }).map(function (s) { var p = screenOf(s); return { id: s.id, type: s.type, x: p.x, y: p.y, key: s.key, group: s.group, duo: s.duo, mystery: s.mystery, revealed: s.revealed, glue: s.tape, flap: s.flap }; }) : []
       };
     }
   };

@@ -48,13 +48,40 @@
   });
   var SHAPES = ['full', 'circle', 'heart', 'diamond', 'full', 'butterfly'];
 
-  /* Everything the sheet engine and the book need to set up level i. missions: the slot types of each page. */
-  function build(i) {
-    var p = LEVELS[i], rng = rngOf(9157 + i * 7919 + (p.salt || 0) * 104729);
+  /* 50-level Scrapbook Campaign from so-sticker-3.html (Diorama Shadow Box mode). */
+  var CAMPAIGN_STORIES = {
+    beach: { title: 'Ngày hội bãi biển', album: 6, scenes: [
+      { imgL: 'beach-1', imgR: 'beach-2', title: 'Tới bãi biển', line: 'Mia và Bo tới bãi biển! Dựng ô, gọi cua ra chơi rồi xây lâu đài cát nào.',
+        left: [[62, 0.52, 0.58, 0.34], [60, 0.25, 0.56, 0.64], [61, 0.77, 0.56, 0.64], [64, 0.52, 0.84, 0.16], [63, 0.11, 0.9, 0.13], [63, 0.85, 0.94, 0.13]],
+        right: [[64, 0.19, 0.62, 0.2], [65, 0.54, 0.68, 0.43], [67, 0.16, 0.87, 0.17], [67, 0.87, 0.67, 0.16], [63, 0.79, 0.9, 0.17]] },
+      { imgL: 'beach-3', imgR: 'beach-4', title: 'Ra khơi', line: 'Cá heo ghé chào! Nhặt sao biển, vỏ sò, rồi tối nay quây quần bên lửa trại.',
+        left: [[66, 0.57, 0.48, 0.4], [67, 0.27, 0.8, 0.17], [68, 0.12, 0.93, 0.14], [67, 0.7, 0.87, 0.17], [68, 0.88, 0.94, 0.12]],
+        right: [[60, 0.25, 0.57, 0.62], [61, 0.77, 0.57, 0.62], [69, 0.51, 0.82, 0.24], [63, 0.21, 0.93, 0.14], [63, 0.82, 0.93, 0.14]] }
+    ] }
+  };
+  var CAMPAIGN_LEVELS = (PO.ScrapbookCampaign || []).map(function (record) {
+    var copy = Object.assign({}, record);
+    var s = CAMPAIGN_STORIES[copy.story];
+    if (s) { copy.album = s.album; copy.scenes = s.scenes; }
+    copy.hard = copy.tier === 'hard';
+    return copy;
+  });
+
+  function buildFromList(list, i, isCampaign) {
+    var p = list[i];
+    var srcIdx = p.sourceIndex == null ? i : p.sourceIndex;
+    var rng = rngOf(9157 + srcIdx * 7919 + (p.salt || 0) * 104729);
     var designs = shuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], rng).map(function (d) { return p.album * 10 + d; });
-    var pool = designs.slice(0, p.pool || 10);
+    var rawMissions = p.missions ? p.missions.slice() : [];
+    if (isCampaign && !p.scenes) {
+      var wantSpreads = srcIdx < 5 ? 2 : 3;
+      while (rawMissions.length < wantSpreads * 2) rawMissions.push(p.missions[rawMissions.length % p.missions.length]);
+      rawMissions = rawMissions.map(function (n) { return Math.max(2, n); });
+    }
+    var poolSize = p.scenes ? (p.pool || 10) : (isCampaign ? Math.min(10, Math.max(p.pool || 2, srcIdx === 0 ? 3 : Math.min(7, 3 + Math.floor(srcIdx / 4)))) : (p.pool || 10));
+    var pool = designs.slice(0, poolSize);
     var slotTypes = function (page) { return page.map(function (sl) { return sl[0]; }); };
-    var missions = p.scenes ? [].concat.apply([], p.scenes.map(function (sc) { return [slotTypes(sc.left), slotTypes(sc.right)]; })) : p.missions.map(function (n) {
+    var missions = p.scenes ? [].concat.apply([], p.scenes.map(function (sc) { return [slotTypes(sc.left), slotTypes(sc.right)]; })) : rawMissions.map(function (n) {
       /* `kinds` different stickers from the pool, at least one slot each, the rest of the page spread over them. */
       var kinds = shuffle(pool.slice(), rng).slice(0, Math.min(p.kinds, n));
       var page = kinds.slice();
@@ -66,13 +93,17 @@
     /* Decoy triples: kinds of the album no slot wants. */
     var spare = designs.filter(function (t) { return !used[t]; }), decoys = [];
     for (var d = 0; d < (p.decoys || 0); d++) decoys.push(spare[d % spare.length]);
+    var bottom = !isCampaign || p.scenes ? p.bottom : (targets.length >= 10 ? Math.min(p.bottom, 0.52) : targets.length >= 8 ? Math.min(p.bottom, 0.62) : p.bottom);
     var cfg = {
-      n: i + 1, seed: 4241 + i * 7919 + (p.salt || 0) * 31, album: p.album, mixed: true, quilt: true, trayTop: true,
+      n: srcIdx + 1, seed: 4241 + srcIdx * 7919 + (p.salt || 0) * 31, album: p.album, mixed: true, quilt: true, trayTop: true,
       triples: targets.length + decoys.length, pool: targets.concat(decoys), peak: p.peak, spread: p.spread,
-      bottom: p.bottom, shape: SHAPES[i % SHAPES.length], mods: p.mods, tier: p.hard ? 'hard' : 'normal'
+      bottom: bottom, shape: SHAPES[srcIdx % SHAPES.length], mods: p.mods, tier: p.hard ? 'hard' : 'normal',
+      scrapbook: p.scrapbook, missions: missions, decoys: decoys, intro: p.intro, role: p.role, decision: p.decision
     };
     return { def: p, cfg: cfg, missions: missions, targets: targets, decoys: decoys };
   }
+  function build(i) { return buildFromList(LEVELS, i, false); }
+  function buildCampaign(i) { return buildFromList(CAMPAIGN_LEVELS, i, true); }
 
   /* ---------- where a burst goes (the book's bookkeeping, kept here so tools/test-hunt.js can check it) ----------
      filled[p][k]: slot k of page p is stuck in (or a sticker is on its way); only the open spread's pages are read.
@@ -96,6 +127,26 @@
     }
     return out;
   }
+  function fillBook(missions, decoys, types) {
+    var held = {}, credit = {}, spread = 0, filled = openCredit(missions, 0, credit), stray = 0, placed = 0, total = 0;
+    missions.forEach(function (m) { total += m.length; });
+    var full = function (s) { for (var q = s * 2; q < s * 2 + 2 && q < missions.length; q++) if (filled[q].indexOf(false) >= 0) return false; return true; };
+    types.forEach(function (t) {
+      held[t] = (held[t] || 0) + 1;
+      if (held[t] < 3) return;
+      held[t] = 0;
+      var to = place(missions, spread, filled, credit, t);
+      if (to === 'credit') { credit[t] = (credit[t] || 0) + 1; placed++; }
+      else if (to) { filled[to.page][to.slot] = true; placed++; }
+      else if (decoys.indexOf(t) < 0) stray++;
+      while (full(spread) && spread * 2 + 2 < missions.length) { spread++; var got = openCredit(missions, spread, credit); for (var q in got) filled[q] = got[q]; }
+    });
+    var page = spread * 2;
+    if (filled[page] && filled[page].indexOf(false) < 0 && filled[page + 1]) page++;
+    var kept = Object.keys(credit).filter(function (t) { return credit[t]; }), stuck = 0;
+    for (var q in filled) filled[q].forEach(function (f) { if (f) stuck++; });
+    return { spread: spread, page: page, stuck: stuck, missing: total - placed, kept: kept, stray: stray, done: full(spread) && spread * 2 + 2 >= missions.length && !kept.length };
+  }
 
-  PO.Hunt = { PAGES: LEVELS, STORIES: STORIES, build: build, place: place, openCredit: openCredit };
+  PO.Hunt = { PAGES: LEVELS, CAMPAIGN: CAMPAIGN_LEVELS, STORIES: STORIES, CAMPAIGN_STORIES: CAMPAIGN_STORIES, build: build, buildCampaign: buildCampaign, place: place, openCredit: openCredit, fillBook: fillBook };
 })(typeof window !== 'undefined' ? window : globalThis);
