@@ -10,14 +10,15 @@
 
   /* ---------- save ---------- */
   var KEY = 'so-sticker-v6';   // v6: tile match rules; preserves both Pro Mode and Scrapbook Campaign saves
-  var save = { unlocked: 1, stars: [], campUnlocked: 1, campStars: [], mode: 'pro', collected: {}, seen: {} };
+  var save = { unlocked: 1, stars: [], campUnlocked: 1, campStars: [], mode: 'campaign', collected: {}, seen: {} };
   try { var raw = localStorage.getItem(KEY); if (raw) save = Object.assign(save, JSON.parse(raw)); } catch (e) { /* plays without saving */ }
   if (!save.collected) save.collected = {};
   if (!save.campStars) save.campStars = [];
   if (!save.seen) save.seen = {};
-  if (!save.mode) save.mode = 'pro';
+  if (!save.mode || !save.defaultDioramaFirst) { save.mode = 'campaign'; save.defaultDioramaFirst = true; }
   var activeMode = save.mode;
   function persist() { try { localStorage.setItem(KEY, JSON.stringify(save)); } catch (e) { /* plays without saving */ } }
+  if (raw === null || save.defaultDioramaFirst) persist();
   function isScrapbook() { return !!(lv && lv.def && lv.def.scrapbook); }
   function isStickerCollected(id) {
     if (save.collected && save.collected[id]) return true;
@@ -99,6 +100,18 @@
     return pocketStack.length + inFlight;
   }
   function isPocketFull() { return pocketCount() >= pocketMax(); }
+  function dioramaShelfGeom(w, h, maxCap) {
+    maxCap = maxCap || 2;
+    var midX = (PAGE_RECT[0][0] + PAGE_RECT[1][1]) * 0.5 * w;
+    var step = h * 0.118, sw = h * 0.055 + maxCap * step + h * 0.04, sh = h * 0.195;
+    var sx = midX - sw * 0.5, sy = h * 0.992 - sh;
+    var plankY = sy + sh - h * 0.068;
+    var slots = [];
+    for (var i = 0; i < maxCap; i++) {
+      slots.push({ x: sx + h * 0.048 + (i + 0.5) * step, y: plankY - h * 0.042, r: step * 0.44 });
+    }
+    return { x: sx, y: sy, w: sw, h: sh, plankY: plankY, step: step, slots: slots };
+  }
   var bookW = 300, bookH = 180, glowTypes = {};
   var dragModeActive = false, waxSheet = [], dragItem = null, selectedWax = null;
   var botActive = false, botTimer = 0;
@@ -108,7 +121,7 @@
   var PAGES_X = [{ x0: 0.07, x1: 0.47 }, { x0: 0.53, x1: 0.93 }], PAGE_Y0 = 0.2, PAGE_Y1 = 0.9;
   /* A chapter with a picture per page (imgL, imgR): each picture covers its page, slots in 0..1 of that page. */
   var PAGE_RECT = [[0.045, 0.495], [0.505, 0.955]], PAGE_TOP = 0.07, PAGE_H = 0.87;
-  var D_TOP = 0.045, D_H = 0.835;
+  var D_TOP = 0.045, D_H = 0.822;
   function pageFrame(side, w, h) {
     var pg = PAGE_RECT[side], pw = (pg[1] - pg[0]) * w, ph = D_H * h, size = Math.min(pw, ph);
     return { x: pg[0] * w + (pw - size) / 2, y: D_TOP * h + (ph - size) / 2, size: size };
@@ -177,10 +190,10 @@
     [left, right].forEach(function (list, side) {
       list.forEach(function (sl, k) {
         if (got[s * 2 + side] && got[s * 2 + side][k]) {
-          if (isScrapbook() || s === 0 || reduced) {
+          if (s === 0 || reduced) {
             sl.filledAt = 0;
           } else {
-            /* Reserve the slot during the page turn so the sticker can burst out of the Bookmark Pocket right after! */
+            /* Reserve the slot during the turn/slide so the standing sticker can leap off the shelf into its scene! */
             sl.reserved = true;
             pendingUnpack.push(sl);
           }
@@ -417,6 +430,107 @@
     }
     x.beginPath(); x.roundRect(px, py, pw, ph, h * 0.04); x.clip();
     x.drawImage(pic, px + (pw - dw) / 2, py + (ph - dh) / 2, dw, dh);
+    x.restore();
+  }
+  /* Khay kệ gỗ gài sticker trang sau (Diorama Standing Tray) tích hợp trực tiếp trên viền dưới của khung hộp Diorama. */
+  function drawDioramaShelf(x, w, h, now) {
+    var maxCap = pocketMax(), g = dioramaShelfGeom(w, h, maxCap);
+    var curCount = Math.min(maxCap, pocketCount()), full = curCount >= maxCap;
+    var pulse = pocketPulse > 0 ? 1 + Math.sin(pocketPulse * Math.PI) * 0.11 : 1;
+    var shX = pocketShake > 0 && !reduced ? Math.sin(pocketShake * 38) * 4 * pocketShake : 0;
+    var cxMid = g.x + g.w / 2, cyMid = g.plankY + h * 0.02;
+
+    x.save();
+    x.translate(cxMid + shX, cyMid);
+    x.scale(pulse, pulse);
+    x.translate(-cxMid, -cyMid);
+
+    var trayX = g.x + h * 0.008, trayW = g.w - h * 0.016;
+    var trayY = g.plankY - h * 0.016, trayH = h * 0.062;
+
+    /* Hào quang nhẹ quanh thanh khay gỗ (chỉ khi có sticker hoặc đầy) */
+    if (curCount > 0 || full) {
+      var glowA = 0.28 + 0.18 * Math.sin(now * (full ? 11 : 5));
+      var hg = x.createRadialGradient(cxMid, g.plankY, trayH * 0.3, cxMid, g.plankY, g.w * 0.62);
+      hg.addColorStop(0, full ? 'rgba(225,29,72,' + glowA + ')' : 'rgba(255,213,49,' + glowA + ')');
+      hg.addColorStop(1, 'rgba(255,213,49,0)');
+      x.fillStyle = hg;
+      x.beginPath(); x.ellipse(cxMid, g.plankY, g.w * 0.62, h * 0.085, 0, 0, TAU); x.fill();
+    }
+
+    /* Thanh khay gỗ nổi gắn liền trên viền khung hộp (không khung trắng bao quanh) */
+    x.shadowColor = 'rgba(28,16,8,0.34)'; x.shadowBlur = h * 0.022; x.shadowOffsetY = h * 0.01;
+    x.beginPath(); x.roundRect(trayX, trayY, trayW, trayH, h * 0.024);
+    var trayG = x.createLinearGradient(0, trayY, 0, trayY + trayH);
+    trayG.addColorStop(0, full ? '#FB7185' : '#DDA05E');
+    trayG.addColorStop(0.45, full ? '#E11D48' : '#BC7B3E');
+    trayG.addColorStop(1, full ? '#9F1239' : '#7E4A21');
+    x.fillStyle = trayG;
+    x.fill();
+    x.shadowColor = 'transparent';
+    x.lineWidth = Math.max(1.1, h * 0.007);
+    x.strokeStyle = full ? '#FFE4E6' : '#5E3415';
+    x.stroke();
+
+    /* Đường gờ sáng mép trên khay gỗ */
+    x.fillStyle = full ? 'rgba(255,228,230,0.45)' : 'rgba(255,246,214,0.5)';
+    x.fillRect(trayX + h * 0.02, trayY + Math.max(1, h * 0.006), trayW - h * 0.04, Math.max(1, h * 0.006));
+
+    /* Từng ô khe gài + sticker đứng dán thẳng vào khay */
+    for (var i = 0; i < maxCap; i++) {
+      var sl = g.slots[i], item = pocketStack[i];
+      /* Khe rãnh khoét sâu trên mặt khay gỗ */
+      x.beginPath(); x.ellipse(sl.x, g.plankY + h * 0.012, sl.r * 0.62, h * 0.015, 0, 0, TAU);
+      x.fillStyle = full ? 'rgba(110,12,34,0.55)' : 'rgba(54,28,10,0.52)';
+      x.fill();
+
+      if (item) {
+        var sp = stickerSprite(item.type);
+        var age = item.addedAt ? Math.max(0, now - item.addedAt) : 1;
+        var popSc = age < 0.35 && !reduced ? backOut(Math.min(1, age / 0.35)) : 1;
+        var sway = !reduced ? Math.sin(now * 3.4 + i * 1.5) * 0.045 : 0;
+        var bob = !reduced ? Math.sin(now * 4.2 + i * 1.5) * h * 0.005 : 0;
+        var stBox = (sl.r * 2.2) / Art.ART;
+        x.save();
+        x.translate(sl.x, sl.y + bob);
+        x.rotate(sway);
+        x.scale(popSc, popSc);
+        x.drawImage(sp.shadow, -stBox / 2, -stBox / 2 + h * 0.008, stBox, stBox);
+        x.drawImage(sp.front, -stBox / 2, -stBox / 2, stBox, stBox);
+        x.restore();
+      } else {
+        /* Ô trống trong suốt có vòng nét đứt mảnh nổi trực tiếp trên mép khay */
+        x.save();
+        x.beginPath(); x.arc(sl.x, sl.y + h * 0.008, sl.r * 0.48, 0, TAU);
+        x.fillStyle = full ? 'rgba(190,18,60,0.22)' : 'rgba(62,36,14,0.24)';
+        x.fill();
+        x.setLineDash([Math.max(2, h * 0.01), Math.max(2, h * 0.008)]);
+        x.lineWidth = Math.max(1, h * 0.005);
+        x.strokeStyle = full ? 'rgba(255,228,230,0.75)' : 'rgba(255,248,225,0.72)';
+        x.stroke();
+        x.setLineDash([]);
+        x.fillStyle = 'rgba(255,250,232,0.92)';
+        x.font = '800 ' + Math.round(h * 0.04) + 'px "Baloo 2",system-ui,sans-serif';
+        x.textAlign = 'center'; x.textBaseline = 'middle';
+        x.fillText('+', sl.x, sl.y + h * 0.01);
+        x.restore();
+      }
+    }
+
+    /* Nhãn sức chứa gọn ở mép dưới thanh khay gỗ */
+    var pillTxt = full ? ('🔒 ĐẦY ' + curCount + '/' + maxCap) : ('📌 CHỜ ' + curCount + '/' + maxCap);
+    var pFs = Math.max(7.5, Math.round(h * 0.036));
+    x.font = '800 ' + pFs + 'px "Baloo 2",system-ui,sans-serif';
+    var pw2 = x.measureText(pillTxt).width + pFs * 1.15, ph2 = pFs * 1.25;
+    var px2 = cxMid - pw2 / 2, py2 = trayY + trayH - ph2 * 0.45;
+    x.beginPath(); x.roundRect(px2, py2, pw2, ph2, ph2 * 0.5);
+    x.fillStyle = full ? '#BE123C' : '#5A3418';
+    x.fill();
+    x.lineWidth = Math.max(1, h * 0.0045); x.strokeStyle = '#FFF'; x.stroke();
+    x.fillStyle = full ? '#FFF' : '#FFE8A3';
+    x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillText(pillTxt, cxMid, py2 + ph2 / 2 + 0.5);
+
     x.restore();
   }
   function drawDioramaBook(x, w, h, pages, opts) {
@@ -760,13 +874,22 @@
     x.beginPath(); x.roundRect(px, py, pw, ph, h * 0.036);
     x.lineWidth = Math.max(1.2, h * 0.011); x.strokeStyle = 'rgba(114,76,38,0.45)'; x.stroke();
 
+    var showShelf = !!(opts.active && !opts.full && (shown < spreads() - 1 || pocketStack.length > 0));
     if (opts.title || (totalWant && !opts.full && (opts.active && (opts.active[0] || opts.active[1])))) {
       var barY = (D_TOP + D_H + 1) * 0.5 * h;
       if (opts.title) {
         x.fillStyle = '#5A3418';
-        x.font = '800 ' + Math.round(h * 0.065) + 'px "Baloo 2",system-ui,sans-serif';
+        x.font = '800 ' + Math.round(h * 0.058) + 'px "Baloo 2",system-ui,sans-serif';
         x.textAlign = 'left'; x.textBaseline = 'middle';
-        x.fillText(opts.title, px + h * 0.01, barY);
+        var titleStr = opts.title;
+        if (showShelf) {
+          var maxTitleW = dioramaShelfGeom(w, h, pocketMax()).x - (px + h * 0.01) - h * 0.025;
+          if (x.measureText(titleStr).width > maxTitleW && maxTitleW > 20) {
+            while (titleStr.length > 1 && x.measureText(titleStr + '…').width > maxTitleW) titleStr = titleStr.slice(0, -1);
+            titleStr += '…';
+          }
+        }
+        x.fillText(titleStr, px + h * 0.01, barY);
       }
       if (totalWant && !opts.full && opts.active && (opts.active[0] || opts.active[1])) {
         var rightEdge = px + pw - h * 0.01;
@@ -797,6 +920,7 @@
         }
       }
     }
+    if (showShelf) drawDioramaShelf(x, w, h, now);
     x.restore();
   }
   function drawBook(x, w, h, pages, opts) {
@@ -1196,7 +1320,7 @@
   function endFlip() {
     flip = null;
     tellScene();
-    if (!isScrapbook()) unpackPocket();
+    unpackPocket();
   }
   function slotScreen(sl) {
     var r = artCv.getBoundingClientRect(), pose = slotPose(sl, bookW, bookH, isScrapbook());
@@ -1205,7 +1329,15 @@
     pose.size *= scaleY; pose.box *= scaleY;
     return pose;
   }
-  function pocketScreen() { var r = artCv.getBoundingClientRect(); return { x: r.left + POCKET_U * bookW, y: r.top + POCKET_V * bookH }; }
+  function pocketScreen(slotIdx) {
+    var r = artCv.getBoundingClientRect(), scaleX = r.width / bookW, scaleY = r.height / bookH;
+    if (isScrapbook()) {
+      var g = dioramaShelfGeom(bookW, bookH, pocketMax());
+      var s = slotIdx !== undefined && g.slots[slotIdx] ? g.slots[slotIdx] : { x: g.x + g.w / 2, y: g.y + g.h / 2, r: g.step * 0.44 };
+      return { x: r.left + s.x * scaleX, y: r.top + s.y * scaleY, box: (s.r * 2.15 * scaleY) / Art.ART, rot: 0 };
+    }
+    return { x: r.left + POCKET_U * r.width, y: r.top + POCKET_V * r.height, box: 28, rot: -0.18 };
+  }
   function bookPct() { return lv && lv.targets.length ? Math.round(booked / lv.targets.length * 100) : 0; }
   function pageFull(list, now) { return list.every(function (s) { return s.filledAt >= 0 && now >= s.filledAt + 0.4; }); }
   function bookDone(now) { return !flip && shown >= spreads() - 1 && pageFull(left, now) && pageFull(right, now); }
@@ -1234,15 +1366,21 @@
     flights.push({ toPocket: true, x0: sx, y0: sy, x1: to.x, y1: to.y, t: 0, spin: 0, trail: 0, pts: [], design: type, hex: hexOfType(type), holo: !!holo, side: 1 });
     rings.push({ x: sx, y: sy, t: 0, dur: 0.36, r0: 12, r1: 68, hex: '#FFD531', w: 5.5 });
   }
-  /* Scrapbook Campaign Mode: a triple for a later spread flies into the right edge of the diorama to be saved. */
-  function launchCredit(type, sx, sy) {
-    var r = artCv.getBoundingClientRect(), tx = r.right - 14, ty = r.top + r.height * 0.52;
-    flights.push({ credit: true, x0: sx, y0: sy, x1: tx, y1: ty, t: -CHARGE, spin: 0, trail: 0, pts: [], design: type, hex: hexOfType(type), side: sx < tx ? 1 : -1 });
-    rings.push({ x: sx, y: sy, t: 0, dur: 0.28, r0: 12, r1: 52, hex: '#FFD654', w: 4 });
+  /* Scrapbook Campaign Mode: a triple for a later spread peels in mid-air and lands upright on the Diorama Standing Shelf! */
+  function launchCredit(type, sx, sy, holo) {
+    var slotIdx = Math.min(pocketMax() - 1, pocketCount());
+    var to = pocketScreen(slotIdx);
+    flights.push({
+      toPocket: true, creditStand: true, slotIdx: slotIdx,
+      x0: sx, y0: sy, x1: to.x, y1: to.y, t: -CHARGE, spin: 0, trail: 0, pts: [],
+      design: type, hex: hexOfType(type), holo: !!holo, side: sx < to.x ? 1 : -1
+    });
+    rings.push({ x: sx, y: sy, t: 0, dur: 0.3, r0: 12, r1: 58, hex: '#FFD654', w: 4.5 });
   }
   function stickIntoPocket(f) {
-    var to = pocketScreen();
-    pocketStack.push({ type: f.design, holo: f.holo });
+    var idx = f.slotIdx !== undefined ? f.slotIdx : Math.min(pocketMax() - 1, pocketStack.length);
+    var to = pocketScreen(idx);
+    pocketStack.push({ type: f.design, holo: f.holo, addedAt: performance.now() / 1000 });
     pocketPulse = 1;
     rings.push({ x: to.x, y: to.y, t: 0, dur: 0.38, r0: 6, r1: 52, hex: '#FFD531', w: 5.5 });
     rings.push({ x: to.x, y: to.y, t: -0.04, dur: 0.44, r0: 8, r1: 68, hex: f.hex, w: 3.5 });
@@ -1255,26 +1393,33 @@
     Snd.stick();
     buzz(15);
   }
-  /* As soon as the new spread opens, all stickers waiting in the Bookmark Pocket burst out and fly into their slots! */
+  /* As soon as the new spread opens, all stickers waiting in the Standing Shelf / Corner Pocket leap into their slots! */
   function unpackPocket() {
     if (!pendingUnpack.length) return;
     var list = pendingUnpack.slice();
     pendingUnpack = [];
-    var from = pocketScreen();
     pocketPulse = 1;
     Snd.magic && Snd.magic();
-    toast('✨ Sticker từ góc kẹp sổ bay vào trang mới!');
-    list.forEach(function (sl, i) {
+    toast(isScrapbook() ? '✨ Sticker từ Kệ Chờ nhảy vào cảnh mới!' : '✨ Sticker từ góc kẹp sổ bay vào trang mới!');
+    var jobs = list.map(function (sl) {
       var idx = -1;
-      for (var k = 0; k < pocketStack.length; k++) if (pocketStack[k].type === sl.type) { idx = k; break; }
-      var item = idx >= 0 ? pocketStack.splice(idx, 1)[0] : pocketStack.pop();
-      var to = slotScreen(sl);
+      for (var k = 0; k < pocketStack.length; k++) {
+        if (!pocketStack[k]._taken && pocketStack[k].type === sl.type) { idx = k; break; }
+      }
+      if (idx < 0) for (var k2 = pocketStack.length - 1; k2 >= 0; k2--) if (!pocketStack[k2]._taken) { idx = k2; break; }
+      var item = idx >= 0 ? pocketStack[idx] : null;
+      if (item) item._taken = true;
+      return { sl: sl, item: item, from: pocketScreen(idx >= 0 ? idx : 0) };
+    });
+    pocketStack = pocketStack.filter(function (it) { return !it._taken; });
+    jobs.forEach(function (jb, i) {
+      var to = slotScreen(jb.sl);
       flights.push({
-        slot: sl, fromPocket: true, x0: from.x, y0: from.y, x1: to.x, y1: to.y,
-        t: -i * 0.14, spin: 0, trail: 0, pts: [], design: sl.type, hex: hexOfType(sl.type),
-        holo: !!(item && item.holo), side: -1
+        slot: jb.sl, fromPocket: true, x0: jb.from.x, y0: jb.from.y, x1: to.x, y1: to.y,
+        t: -i * 0.14, spin: 0, trail: 0, pts: [], design: jb.sl.type, hex: hexOfType(jb.sl.type),
+        holo: !!(jb.item && jb.item.holo), side: -1
       });
-      rings.push({ x: from.x, y: from.y, t: -i * 0.14, dur: 0.36, r0: 8, r1: 58, hex: '#FFD531', w: 5.5 });
+      rings.push({ x: jb.from.x, y: jb.from.y, t: -i * 0.14, dur: 0.36, r0: 8, r1: 58, hex: '#FFD531', w: 5.5 });
     });
   }
   /* The slap: the sticker lands in its slot with a physical book bump, shockwaves, 4-point star sparkles and a satisfying stick sound. */
@@ -1608,7 +1753,7 @@
       if (reduced) { flights.splice(i, 1); if (f.toPocket) stickIntoPocket(f); else stickInto(f); continue; }
       var sp0 = stickerSprite(f.design);
       if (!f.pts) f.pts = [];
-      if (f.toPocket || f.fromPocket) {
+      if ((f.toPocket && !f.creditStand) || f.fromPocket) {
         var MERGE_PK = 0.16, FLY_PK = 0.48;
         if (f.t < MERGE_PK) {
           var mpk = f.t / MERGE_PK;
@@ -1619,9 +1764,9 @@
           continue;
         }
         var pPk = Math.min(1, (f.t - MERGE_PK) / FLY_PK), ePk = ease(pPk);
-        var toPk = f.toPocket ? pocketScreen() : slotScreen(f.slot);
+        var toPk = f.toPocket ? pocketScreen(f.slotIdx) : slotScreen(f.slot);
         f.x1 = toPk.x; f.y1 = toPk.y;
-        if (f.fromPocket) { var fp0 = pocketScreen(); f.x0 = fp0.x; f.y0 = fp0.y; }
+        if (f.fromPocket && !isScrapbook()) { var fp0 = pocketScreen(f.slotIdx); f.x0 = fp0.x; f.y0 = fp0.y; }
         var mxPk = (f.x0 + f.x1) / 2 + f.side * (f.fromPocket ? -45 : -72), myPk = Math.min(f.y0, f.y1) - (f.fromPocket ? 92 : 128);
         var xPk = (1 - ePk) * (1 - ePk) * f.x0 + 2 * (1 - ePk) * ePk * mxPk + ePk * ePk * f.x1;
         var yPk = (1 - ePk) * (1 - ePk) * f.y0 + 2 * (1 - ePk) * ePk * myPk + ePk * ePk * f.y1;
@@ -1687,7 +1832,7 @@
         continue;
       }
       var p = Math.min(1, (f.t - MERGE - PEEL) / FLY);
-      var to = f.credit ? { x: f.x1, y: f.y1, box: 28, rot: 0.2 } : slotScreen(f.slot);
+      var to = f.creditStand ? pocketScreen(f.slotIdx) : (f.credit ? { x: f.x1, y: f.y1, box: 28, rot: 0.2 } : slotScreen(f.slot));
       f.x1 = to.x; f.y1 = to.y;
       var sx = stageX, sy = stageY;
       var windEnd = 0.24, dive = p <= windEnd ? 0 : Math.pow((p - windEnd) / (1 - windEnd), 2.2);
@@ -1702,12 +1847,12 @@
       var x = bx + (-ty / tLen) * sway, y = by + (tx / tLen) * sway;
       f.pts.push({ x: x, y: y });
       if (f.pts.length > 18) f.pts.shift();
-      var impactScale = f.credit ? (to.box / 54) : (to.box / 54) * 1.36;
+      var impactScale = (f.creditStand || f.credit) ? (to.box / 54) : (to.box / 54) * 1.36;
       var curScale = p <= windEnd
         ? (HERO * 1.06) + (HERO * 1.10 - HERO * 1.06) * ease(p / windEnd)
         : (HERO * 1.10) + (impactScale - HERO * 1.10) * dive;
       drawRibbon(f.pts, f.holo ? '#FFD531' : f.hex, 54 * curScale * 0.3, 1 - dive * 0.15);
-      if (dive > 0.35 && !f.credit) {
+      if (dive > 0.35 && !f.credit && !f.creditStand) {
         drawHoverShadow(x, y + (1 - dive) * 26 + 3, to.box * 0.42, ((dive - 0.35) / 0.65) * 0.28);
       }
       f.trail += dt;
@@ -1718,7 +1863,7 @@
       var bank = Math.max(-0.28, Math.min(0.28, tx * 0.00075)) * Math.sin(dive * Math.PI);
       var swayRot = Math.cos(p * TAU * 0.95) * (1 - dive) * 0.15 * f.side;
       var fRot = (-0.08 * f.side) * (1 - dive) + (to.rot || 0) * dive + bank + swayRot;
-      var flyAmp = f.credit ? 19 * (1 - dive) : 19 + (15 - 19) * dive;
+      var flyAmp = (f.credit || f.creditStand) ? 19 * (1 - dive) : 19 + (15 - 19) * dive;
       drawUndulatingSticker(f, sp0.front, Art.SPR, x, y, curScale, fRot, {
         amp: flyAmp,
         freq: 5.2,
@@ -1727,7 +1872,7 @@
         sheen: p < 0.32 ? p / 0.32 : undefined,
         liftShadow: (1 - dive) * 6
       });
-      if (p >= 1) { flights.splice(i, 1); stickInto(f); }
+      if (p >= 1) { flights.splice(i, 1); if (f.creditStand) stickIntoPocket(f); else stickInto(f); }
     }
     for (var fi = flyFloats.length - 1; fi >= 0; fi--) {
       var fl = flyFloats[fi];
@@ -1793,7 +1938,7 @@
     rings.push({ x: pk.x, y: pk.y, t: 0, dur: 0.45, r0: 10, r1: 66, hex: '#E11D48', w: 6 });
     rings.push({ x: sx, y: sy, t: 0, dur: 0.42, r0: 8, r1: 54, hex: '#E11D48', w: 5 });
     blockBeams.push({ x0: sx, y0: sy, t: 0, dur: 0.85 });
-    toast('🔒 Kẹp Trang Sau đã đầy (' + pocketCount() + '/' + pocketMax() + ')! Sticker trang sau không thể merge — hãy dán xong trang này trước!');
+    toast((isScrapbook() ? '🔒 Kệ Đứng Trang Sau đã đầy (' : '🔒 Góc Kẹp Trang Sau đã đầy (') + pocketCount() + '/' + pocketMax() + ')! Sticker trang sau không thể merge — hãy dán xong trang này trước!');
     if (!pocketTutShown) {
       pocketTutShown = true;
       setTimeout(function () { if (running) showPocketTutorial(true); }, 550);
@@ -1811,8 +1956,13 @@
       credit[d.type] = (credit[d.type] || 0) + 1;
       booked++;
       if (isScrapbook()) {
-        launchCredit(d.type, r.left + d.x, r.top + d.y);
-        toast('Cất cho bước sau!');
+        launchCredit(d.type, r.left + d.x, r.top + d.y, d.holo);
+        var campCount = pocketCount();
+        if (campCount >= pocketMax()) {
+          toast('🔒 Kệ Đứng Trang Sau đã ĐẦY (' + campCount + '/' + pocketMax() + ')! Hãy dán trang hiện tại trước!');
+        } else {
+          toast('📌 Đã đặt lên Kệ Đứng Trang Sau (' + campCount + '/' + pocketMax() + ')!');
+        }
       } else {
         launchPocket(d.type, r.left + d.x, r.top + d.y, d.holo);
         var newCount = pocketCount();
@@ -1905,21 +2055,18 @@
       step(2, p2, '<b>Đủ 3 cái giống nhau</b> thì nổ, và một sticker <b>bay lên dán vào ô</b> của nó trên trang.');
       var p3 = el('span', 'pic wait'); p3.appendChild(icon(other, 22)); p3.appendChild(icon(want, 22)); p3.appendChild(el('i'));
       step(3, p3, 'Khay có <b>7 ô</b>. Ưu tiên gom cho đủ bộ đang dở, đừng mở quá nhiều loại.');
-      if (!isScrapbook()) {
-        var p4 = el('span', 'pic wait'); p4.appendChild(icon(other, 22)); p4.appendChild(el('b', '', '🔖' + pocketMax()));
-        step(4, p4, '<b>Góc Kẹp Trang Sau (Tối đa ' + pocketMax() + ' chỗ):</b> Bộ 3 của trang sau sẽ bay tạm vào góc sổ. <b>Khi đầy (' + pocketMax() + '/' + pocketMax() + '), sticker chỉ còn chỗ ở trang sau sẽ KHÔNG THỂ merge!</b>');
-      }
+      var isCamp = isScrapbook();
+      var p4 = el('span', 'pic wait'); p4.appendChild(icon(other, 22)); p4.appendChild(el('b', '', (isCamp ? '📌' : '🔖') + pocketMax()));
+      step(4, p4, '<b>' + (isCamp ? 'Kệ Đứng Trang Sau' : 'Góc Kẹp Trang Sau') + ' (Tối đa ' + pocketMax() + ' chỗ):</b> Bộ 3 của trang sau sẽ bay tạm lên ' + (isCamp ? 'kệ gỗ đứng trên hộp Diorama' : 'góc sổ') + '. <b>Khi đầy (' + pocketMax() + '/' + pocketMax() + '), sticker chỉ còn chỗ ở trang sau sẽ KHÔNG THỂ merge!</b>');
       card.appendChild(ol);
       var rule = el('p', 'rule');
       rule.innerHTML = '<b>Thắng:</b> bóc hết tờ, dán kín mọi trang sổ.<br><b>Thua:</b> khay đầy 7 ô.';
       card.appendChild(rule);
       var a = el('div', 'acts');
-      if (!isScrapbook()) {
-        a.appendChild(btn('📖 Xem chi tiết Luật Kẹp Trang Sau', 'wide', function () {
-          close();
-          showPocketTutorial(false, then);
-        }));
-      }
+      a.appendChild(btn('📖 Xem chi tiết Luật ' + (isCamp ? 'Kệ Trang Sau' : 'Kẹp Trang Sau'), 'wide', function () {
+        close();
+        showPocketTutorial(false, then);
+      }));
       a.appendChild(btn('Chơi thôi!', 'primary big wide', function () {
         close();
         Game.setPaused(false);
@@ -1942,10 +2089,24 @@
   function triggerDemoPocketFullBlock() {
     if (!lv || !running) return;
     var maxC = pocketMax(), laterT = findLaterType();
-    /* Fill pocket up to maxCap immediately so it hits FULL state */
+    var nowSec = performance.now() / 1000, usedByT = Object.assign({}, credit), pool = [];
+    for (var p = (shown + 1) * 2; p < lv.missions.length; p++) {
+      for (var k = 0; k < lv.missions[p].length; k++) {
+        var mt = lv.missions[p][k];
+        if (!slotFor(mt)) pool.push(mt);
+      }
+    }
+    /* Prefer distinct future types other than laterT so laterT keeps its target slot on future spreads */
+    var picks = pool.filter(function (mt) { return mt !== laterT; });
     while (pocketCount() < maxC) {
-      pocketStack.push({ type: laterT, holo: false });
-      credit[laterT] = (credit[laterT] || 0) + 1;
+      var fillT = laterT;
+      for (var pi = 0; pi < picks.length; pi++) {
+        var cand = picks[pi];
+        var totalLater = pool.filter(function (mt) { return mt === cand; }).length;
+        if ((usedByT[cand] || 0) < totalLater) { fillT = cand; usedByT[cand] = (usedByT[cand] || 0) + 1; break; }
+      }
+      pocketStack.push({ type: fillT, holo: false, addedAt: nowSec });
+      credit[fillT] = (credit[fillT] || 0) + 1;
     }
     pocketPulse = 1;
     pocketShake = 1;
@@ -1955,14 +2116,16 @@
   function showPocketTutorial(isBlockedContext, then) {
     if (!lv) return;
     Game.setPaused(true);
-    var maxC = pocketMax(), sampleType = findLaterType() || lv.targets[0];
+    var maxC = pocketMax(), sampleType = findLaterType() || lv.targets[0], isCamp = isScrapbook();
     var animRaf = 0;
     modal(function (card, close) {
       card.classList.add('howto', 'pocket-tut');
-      var badge = el('div', 'tut-badge', isBlockedContext ? '🔒 CẢNH BÁO: KẸP TRANG SAU ĐÃ ĐẦY (' + maxC + '/' + maxC + ')!' : '🔖 LUẬT MỚI: GÓC KẸP TRANG SAU');
+      var badge = el('div', 'tut-badge', isBlockedContext
+        ? ('🔒 CẢNH BÁO: ' + (isCamp ? 'KỆ ĐỨNG' : 'KẸP TRANG SAU') + ' ĐÃ ĐẦY (' + maxC + '/' + maxC + ')!')
+        : (isCamp ? '📌 LUẬT MỚI: KỆ ĐỨNG TRANG SAU' : '🔖 LUẬT MỚI: GÓC KẸP TRANG SAU'));
       card.appendChild(badge);
-      card.appendChild(el('h2', '', 'Giới hạn Kẹp Trang Sau (' + maxC + ' chỗ)'));
-      /* Interactive animated canvas illustrating the 2 states: Pocket Open vs Pocket Full (Merge Blocked) */
+      card.appendChild(el('h2', '', 'Giới hạn ' + (isCamp ? 'Kệ Trang Sau' : 'Kẹp Trang Sau') + ' (' + maxC + ' chỗ)'));
+      /* Interactive animated canvas illustrating the 2 states: Shelf/Pocket Open vs Full (Merge Blocked) */
       var vizWrap = el('div', 'tut-viz'), vc = el('canvas'), vw = 290, vh = 104, rr = Math.min(root.devicePixelRatio || 1, 2);
       vc.width = vw * rr; vc.height = vh * rr; vc.style.width = vw + 'px'; vc.style.height = vh + 'px';
       var vx = vc.getContext('2d');
@@ -1984,7 +2147,9 @@
         vx.fillStyle = isFullPhase ? '#BE123C' : '#92400E';
         vx.font = '800 11px "Baloo 2",system-ui,sans-serif';
         vx.textAlign = 'left'; vx.textBaseline = 'top';
-        vx.fillText(isFullPhase ? '❌ KHI KẸP ĐẦY (' + maxC + '/' + maxC + '): CẤM MERGE TRANG SAU!' : '✅ KHI KẸP CÒN CHỖ (1/' + maxC + '): BAY VÀO GÓC SỔ!', 12, 8);
+        vx.fillText(isFullPhase
+          ? ('❌ KHI ' + (isCamp ? 'KỆ' : 'KẸP') + ' ĐẦY (' + maxC + '/' + maxC + '): CẤM MERGE TRANG SAU!')
+          : ('✅ KHI ' + (isCamp ? 'KỆ' : 'KẸP') + ' CÒN CHỖ (1/' + maxC + '): ' + (isCamp ? 'ĐỨNG LÊN KỆ!' : 'BAY VÀO GÓC SỔ!')), 12, 8);
         /* Left: 3 Tray Slots */
         var sp = stickerSprite(sampleType);
         for (var i = 0; i < 3; i++) {
@@ -2028,23 +2193,45 @@
           var fx = (1 - fp) * 70 + fp * 238, fy = (1 - fp) * 64 + fp * 58 - Math.sin(fp * Math.PI) * 26;
           vx.drawImage(sp.front, fx - 13, fy - 13, 26, 26);
         }
-        /* Right: Corner Pocket */
+        /* Right: Diorama Wooden Standing Shelf OR Pro Corner Pocket */
         var px = 244, py = 60, pr = 26;
         vx.save();
         vx.translate(px, py);
-        vx.beginPath(); vx.roundRect(-pr, -pr, pr * 2, pr * 2, 10);
-        vx.fillStyle = '#FFF8E4'; vx.fill();
-        vx.lineWidth = 2; vx.strokeStyle = isFullPhase ? '#E11D48' : '#F59E0B'; vx.stroke();
-        vx.drawImage(sp.front, -14, -18, 26, 26);
-        var fg = vx.createLinearGradient(-pr, pr, pr, -pr);
-        fg.addColorStop(0, isFullPhase ? '#BE123C' : '#FF5A6E');
-        fg.addColorStop(1, isFullPhase ? '#FF5A6E' : '#FFB326');
-        vx.beginPath();
-        vx.moveTo(-pr, pr * 0.5); vx.lineTo(pr * 0.5, -pr); vx.lineTo(pr, -pr); vx.lineTo(pr, pr); vx.lineTo(-pr, pr);
-        vx.closePath(); vx.fillStyle = fg; vx.fill();
-        vx.fillStyle = '#FFF'; vx.font = '800 10px "Baloo 2",system-ui,sans-serif';
-        vx.textAlign = 'center'; vx.textBaseline = 'middle';
-        vx.fillText(isFullPhase ? '🔒 ' + maxC + '/' + maxC : '🔖 1/' + maxC, 4, 11);
+        if (isCamp) {
+          /* Khay gỗ gắn thẳng (không khung trắng bao quanh) + khe rãnh gài sticker */
+          vx.beginPath(); vx.roundRect(-pr, 3, pr * 2, 13, 5);
+          vx.fillStyle = isFullPhase ? '#E11D48' : '#B7793E'; vx.fill();
+          vx.lineWidth = 1.6; vx.strokeStyle = isFullPhase ? '#FFE4E6' : '#5E3415'; vx.stroke();
+          var standCols = maxC;
+          for (var sc = 0; sc < standCols; sc++) {
+            var sx0 = (-pr + 10) + sc * ((pr * 2 - 20) / Math.max(1, standCols - 1));
+            vx.fillStyle = isFullPhase ? '#881337' : '#5E3415';
+            vx.beginPath(); vx.roundRect(sx0 - 7, 5, 14, 4, 2); vx.fill();
+            if (isFullPhase || sc === 0) {
+              vx.drawImage(sp.front, sx0 - 11, -15, 22, 22);
+            }
+          }
+          vx.fillStyle = isFullPhase ? '#BE123C' : '#5A3418';
+          vx.beginPath(); vx.roundRect(-22, 14, 44, 13, 6); vx.fill();
+          vx.lineWidth = 1.2; vx.strokeStyle = '#FFF'; vx.stroke();
+          vx.fillStyle = '#FFF'; vx.font = '800 8.5px "Baloo 2",system-ui,sans-serif';
+          vx.textAlign = 'center'; vx.textBaseline = 'middle';
+          vx.fillText(isFullPhase ? '🔒 ' + maxC + '/' + maxC : '📌 1/' + maxC, 0, 20.5);
+        } else {
+          vx.beginPath(); vx.roundRect(-pr, -pr, pr * 2, pr * 2, 10);
+          vx.fillStyle = '#FFF8E4'; vx.fill();
+          vx.lineWidth = 2; vx.strokeStyle = isFullPhase ? '#E11D48' : '#F59E0B'; vx.stroke();
+          vx.drawImage(sp.front, -14, -18, 26, 26);
+          var fg = vx.createLinearGradient(-pr, pr, pr, -pr);
+          fg.addColorStop(0, isFullPhase ? '#BE123C' : '#FF5A6E');
+          fg.addColorStop(1, isFullPhase ? '#FF5A6E' : '#FFB326');
+          vx.beginPath();
+          vx.moveTo(-pr, pr * 0.5); vx.lineTo(pr * 0.5, -pr); vx.lineTo(pr, -pr); vx.lineTo(pr, pr); vx.lineTo(-pr, pr);
+          vx.closePath(); vx.fillStyle = fg; vx.fill();
+          vx.fillStyle = '#FFF'; vx.font = '800 10px "Baloo 2",system-ui,sans-serif';
+          vx.textAlign = 'center'; vx.textBaseline = 'middle';
+          vx.fillText(isFullPhase ? '🔒 ' + maxC + '/' + maxC : '🔖 1/' + maxC, 4, 11);
+        }
         vx.restore();
         animRaf = requestAnimationFrame(drawTutViz);
       }
@@ -2057,13 +2244,17 @@
         t.innerHTML = html;
         li.appendChild(num); li.appendChild(bEl); li.appendChild(t); ol.appendChild(li);
       }
-      rStep(1, '🔖 ' + maxC, '<b>Giới hạn ' + maxC + ' chỗ kẹp:</b> Khi gom đủ 3 sticker thuộc <b>trang sau</b>, chúng sẽ bay vào <b>Góc Kẹp Sổ</b> (màn này tối đa <b>' + maxC + ' chỗ</b>).');
-      rStep(2, '🔒 ĐẦY', '<b>Đầy kẹp = Chặn Merge:</b> Khi Góc Kẹp đã đầy (<b>' + maxC + '/' + maxC + '</b>), các bộ 3 sticker <b>chỉ còn chỗ ở trang sau sẽ KHÔNG THỂ merge</b> và nằm chờ trong khay (chiếm 3 ô khay)!');
-      rStep(3, '📖 LẬT', '<b>Cách giải cứu:</b> Hãy ưu tiên bóc sticker của <b>trang đang mở</b> để lật trang. Vừa sang trang mới, Góc Kẹp sẽ bung ra và bộ 3 đang kẹt dưới khay sẽ <b>tự động merge</b>!');
+      rStep(1, (isCamp ? '📌 ' : '🔖 ') + maxC, isCamp
+        ? ('<b>Giới hạn ' + maxC + ' chỗ đứng:</b> Khi gom đủ 3 sticker thuộc <b>trang sau</b>, sticker sẽ bay lên đứng chờ trên <b>Kệ Gỗ Diorama</b> (màn này tối đa <b>' + maxC + ' chỗ</b>).')
+        : ('<b>Giới hạn ' + maxC + ' chỗ kẹp:</b> Khi gom đủ 3 sticker thuộc <b>trang sau</b>, chúng sẽ bay vào <b>Góc Kẹp Sổ</b> (màn này tối đa <b>' + maxC + ' chỗ</b>).'));
+      rStep(2, '🔒 ĐẦY', '<b>Đầy ' + (isCamp ? 'kệ' : 'kẹp') + ' = Chặn Merge:</b> Khi ' + (isCamp ? 'Kệ Trang Sau' : 'Góc Kẹp') + ' đã đầy (<b>' + maxC + '/' + maxC + '</b>), các bộ 3 sticker <b>chỉ còn chỗ ở trang sau sẽ KHÔNG THỂ merge</b> và nằm chờ trong khay (chiếm 3 ô khay)!');
+      rStep(3, '📖 LẬT', isCamp
+        ? '<b>Cách giải cứu:</b> Hãy ưu tiên bóc sticker của <b>trang đang mở</b> để chuyển sang phần sau. Vừa qua trang mới, sticker đứng trên kệ sẽ <b>nhảy vào khung</b> và bộ 3 đang kẹt dưới khay sẽ <b>tự động merge</b>!'
+        : '<b>Cách giải cứu:</b> Hãy ưu tiên bóc sticker của <b>trang đang mở</b> để lật trang. Vừa sang trang mới, Góc Kẹp sẽ bung ra và bộ 3 đang kẹt dưới khay sẽ <b>tự động merge</b>!');
       card.appendChild(ol);
       var a = el('div', 'acts');
       if (!isBlockedContext) {
-        a.appendChild(btn('🧪 Xem thử: Làm đầy Kẹp & Chặn Merge ngay!', 'wide', function () {
+        a.appendChild(btn('🧪 Xem thử: Làm đầy ' + (isCamp ? 'Kệ' : 'Kẹp') + ' & Chặn Merge ngay!', 'wide', function () {
           if (animRaf) cancelAnimationFrame(animRaf);
           close();
           Game.setPaused(false);
@@ -2087,8 +2278,18 @@
     if (isScrapbook()) showHowTo(); else showPocketTutorial(false);
   });
   artCv.addEventListener('pointerdown', function (e) {
-    if (!lv || !running || isScrapbook()) return;
+    if (!lv || !running) return;
     var r = artCv.getBoundingClientRect();
+    if (isScrapbook()) {
+      if (shown >= spreads() - 1 && !pocketStack.length) return;
+      var g = dioramaShelfGeom(bookW, bookH, pocketMax());
+      var px = (e.clientX - r.left) * (bookW / r.width), py = (e.clientY - r.top) * (bookH / r.height);
+      if (px >= g.x - 8 && px <= g.x + g.w + 8 && py >= g.y - 8 && py <= g.y + g.h + 10) {
+        Snd.unlock(); Snd.click();
+        showPocketTutorial(false);
+      }
+      return;
+    }
     var u = (e.clientX - r.left) / r.width, v = (e.clientY - r.top) / r.height;
     if (Math.abs(u - POCKET_U) < 0.14 && Math.abs(v - POCKET_V) < 0.18) {
       Snd.unlock(); Snd.click();
@@ -2144,10 +2345,12 @@
   function botTick(now) {
     if (!botActive || !running || winPending || flip || flights.length || Game.busy()) return;
     var s = Game.debugState();
+    if (s.state === 'paused') return;
     if (s.state !== 'play') { stopBot(); return; }
     if (s.animating || now < botTimer) return;
-    if (Game.debugStep() === null) { stopBot(); return; }
-    botTimer = now + 0.26;
+    var res = Game.debugStep();
+    if (res === null) { stopBot(); return; }
+    botTimer = now + (res === 'wait' ? 0.08 : 0.24);
   }
   function toggleBot() {
     if (!lv || !running) return;
@@ -2159,6 +2362,24 @@
   $('botBtn').addEventListener('click', toggleBot);
 
   /* ---------- level flow ---------- */
+  function getBookState() {
+    if (!lv) return null;
+    var openWant = {}, laterWant = {}, decs = lv.decoys || (lv.cfg && lv.cfg.decoys) || [];
+    left.concat(right).forEach(function (sl) {
+      if (sl.filledAt < 0 && !sl.reserved) openWant[sl.type] = (openWant[sl.type] || 0) + 1;
+    });
+    for (var p = (shown + 1) * 2; p < lv.missions.length; p++) {
+      lv.missions[p].forEach(function (mt) { laterWant[mt] = (laterWant[mt] || 0) + 1; });
+    }
+    Object.keys(credit).forEach(function (k) {
+      if (laterWant[k]) laterWant[k] = Math.max(0, laterWant[k] - credit[k]);
+    });
+    return {
+      shown: shown, spreads: spreads(), pocketUsed: pocketCount(), pocketMax: pocketMax(),
+      openWant: openWant, laterWant: laterWant, flip: !!flip,
+      missions: lv.missions, decoys: decs, credit: credit
+    };
+  }
   function startLevel(i, mode) {
     if (mode) { activeMode = mode; save.mode = mode; persist(); }
     var useCampaign = activeMode === 'campaign';
@@ -2175,7 +2396,7 @@
     if (devBar) devBar.hidden = useCampaign;
     var oldToggle = document.getElementById('flapToggle'); if (oldToggle) oldToggle.remove();
     var oldNote = document.getElementById('scrapbookLesson'); if (oldNote) oldNote.remove();
-    $('lvNum').textContent = (lv.def.story ? 'Câu chuyện' : 'Trang ' + (i + 1)) + (lv.def.hard ? ' · KHÓ' : '') + (useCampaign ? '' : ' · 🔖' + pocketMax());
+    $('lvNum').textContent = (lv.def.story ? 'Câu chuyện' : 'Trang ' + (i + 1)) + (lv.def.hard ? ' · KHÓ' : '') + ' · ' + (useCampaign ? '📌' : '🔖') + pocketMax();
     $('play').classList.toggle('hard', !!lv.def.hard);
     if (lv.def.hard) hardSplash();
     flip = null; booked = 0;
@@ -2197,18 +2418,30 @@
           if (slotFor(t)) return true;
           var later = 0;
           for (var p = (shown + 1) * 2; p < lv.missions.length; p++) lv.missions[p].forEach(function (mt) { if (mt === t) later++; });
-          return later > (credit[t] || 0);
+          return later > (credit[t] || 0) && pocketCount() < pocketMax();
         },
         canClearCount: function (t, pending) {
           if (flip) return false;
           var openRoom = left.concat(right).filter(function (sl) { return sl.type === t && sl.filledAt < 0 && !sl.reserved; }).length;
+          var pendOfT = pending.filter(function (type) { return type === t; }).length;
+          if (openRoom > pendOfT) return true;
           var laterRoom = 0;
           for (var p = (shown + 1) * 2; p < lv.missions.length; p++) {
             lv.missions[p].forEach(function (mt) { if (mt === t) laterRoom++; });
           }
-          var room = openRoom + Math.max(0, laterRoom - (credit[t] || 0));
-          return room > pending.filter(function (type) { return type === t; }).length;
+          if (laterRoom - (credit[t] || 0) - (pendOfT - openRoom) <= 0) return false;
+          var pendByType = {}, pendCredit = 0;
+          pending.forEach(function (pt) { pendByType[pt] = (pendByType[pt] || 0) + 1; });
+          Object.keys(pendByType).forEach(function (ptStr) {
+            var pt = +ptStr;
+            var oRoom = left.concat(right).filter(function (sl) { return sl.type === pt && sl.filledAt < 0 && !sl.reserved; }).length;
+            if (pendByType[ptStr] > oRoom) pendCredit += (pendByType[ptStr] - oRoom);
+          });
+          return pocketCount() + pendCredit < pocketMax();
         },
+        isCreditFull: function (t) { return !!flip || (destinationFor(t) === 'credit' && isPocketFull()); },
+        mergeBlocked: onMergeBlocked,
+        bookState: getBookState,
         scrapbookDeny: function (reason) { toast({ capacity: 'Cặp đôi cần 2 ô trống trước khi bóc.', page: 'Bộ ba này thuộc trang sau. Hoàn thành trang đang mở trước.', paper: 'Bóc các sticker giữ mép tờ giấy tím trước. Hết sticker giữ mép, giấy tự mở cả nhóm.', flap: 'Lật giấy bằng nút Lật giấy (F) để mở vùng này.', key: 'Tìm sticker mang chìa cùng chữ để mở cả dải ruy băng.', glue: 'Ghép thêm bộ ba đang cần trên sổ để làm tan một lớp băng.', covered: 'Bóc sticker ở trên trước.' }[reason] || 'Sticker này chưa bóc được.'); },
         flap: function (side) { var b = document.getElementById('flapToggle'); if (b) { b.textContent = 'Lật giấy · ' + (side ? 'B' : 'A') + ' (F)'; b.setAttribute('aria-pressed', String(!!side)); } },
         lessonDone: function (kind) { save.seen[kind] = true; persist(); var note = document.getElementById('scrapbookLesson'); if (note) note.remove(); toast('Đã thử! Giờ tự chọn đường bóc nhé.'); },
@@ -2231,6 +2464,7 @@
         clear: onClear,
         canMerge: canMergeType,
         mergeBlocked: onMergeBlocked,
+        bookState: getBookState,
         shake: shakeStage,
         win: function (r) { running = false; winPending = r; },
         lose: onLose
@@ -2464,6 +2698,7 @@
   }
   function showHome() {
     Game.stop();
+    stopBot();
     lv = null; flights = []; sparks = []; rings = []; liners = []; flyFloats = []; blockBeams = []; flip = null; running = false;
     $('play').hidden = true;
     var box = $('home');
@@ -2472,18 +2707,18 @@
     var logo = el('div', 'logo');
     logo.appendChild(el('h1', '', 'Sổ Sticker'));
     logo.appendChild(el('p', '', activeMode === 'campaign'
-      ? 'Chiến dịch Diorama 3D 50 màn: băng tuyết, giấy bí mật, chìa khóa, cặp đôi & giấy gấp!'
-      : 'Bóc sticker Hologram, xé băng keo, quản lý Góc Kẹp Trang Sau & ghép bộ 3 sống dậy!'));
+      ? 'Diorama Box 3D (50 màn): kệ đứng trang sau, băng tuyết, giấy bí mật, chìa khóa & giấy gấp!'
+      : 'Bản Tranh Sticker Pro: bóc Hologram, xé băng keo, Góc Kẹp Trang Sau & ghép bộ 3 sống dậy!'));
     box.appendChild(logo);
 
     var tabs = el('div', 'mode-tabs');
-    var proTab = el('button', 'mode-tab' + (activeMode === 'pro' ? ' on' : ''), '✨ Sổ Sticker Pro (' + H.PAGES.length + ')');
-    proTab.type = 'button';
-    proTab.addEventListener('click', function () { Snd.unlock(); Snd.click(); activeMode = 'pro'; save.mode = 'pro'; persist(); showHome(); });
-    var campTab = el('button', 'mode-tab' + (activeMode === 'campaign' ? ' on' : ''), '📖 Chiến Dịch Puzzle (' + H.CAMPAIGN.length + ')');
+    var campTab = el('button', 'mode-tab' + (activeMode === 'campaign' ? ' on' : ''), '📖 Diorama Box (' + H.CAMPAIGN.length + ')');
     campTab.type = 'button';
     campTab.addEventListener('click', function () { Snd.unlock(); Snd.click(); activeMode = 'campaign'; save.mode = 'campaign'; persist(); showHome(); });
-    tabs.appendChild(proTab); tabs.appendChild(campTab);
+    var proTab = el('button', 'mode-tab' + (activeMode === 'pro' ? ' on' : ''), '✨ Bản Tranh (' + H.PAGES.length + ')');
+    proTab.type = 'button';
+    proTab.addEventListener('click', function () { Snd.unlock(); Snd.click(); activeMode = 'pro'; save.mode = 'pro'; persist(); showHome(); });
+    tabs.appendChild(campTab); tabs.appendChild(proTab);
     box.appendChild(tabs);
 
     var useCamp = activeMode === 'campaign';

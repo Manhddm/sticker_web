@@ -21,7 +21,7 @@
   var drag = null, staticDirty = true, peeled = 0, peakReached = 0, triplesDone = 0;
   var combo = 0, lastClear = -99, clock = 0, history = [], usedContinue = false, usedBoosters = 0;
   var goldTaken = 0, comboBonus = 0, dangerOn = false, guide = null, idle = 0, kbSel = -1, ending = false, blockedNotified = {};
-  var heldTypes = {}, rules = null, lesson = null, helperStock = {};
+  var heldTypes = {}, rules = null, lesson = null, helperStock = {}, proBotPlan = null, botActing = false;
   var paperMotion = {}, paperShake = {}, paperHover = -1, holderMasks = {};
   var paperR = null, picCv = null, picKey = '', picWin = 0, maskCv = document.createElement('canvas'), hunt = [];
   var settings = { tapPeel: true, haptics: true, idleHint: true };
@@ -170,7 +170,7 @@
     shockwaves = []; lightnings = []; vortex = null; screenShake = 0; fever = false;
     cap = Core.BASE_CAP; drag = null; peeled = 0; peakReached = 0; triplesDone = 0; combo = 0; lastClear = -99;
     merges = 0; hold = 0; whirl = null; clock = 0; usedContinue = false; usedBoosters = 0; goldTaken = 0; comboBonus = 0; dangerOn = false; guide = null;
-    idle = 0; kbSel = -1; ending = false; blockedNotified = {}; state = 'play'; picWin = 0; picKey = '';
+    idle = 0; kbSel = -1; ending = false; blockedNotified = {}; state = 'play'; picWin = 0; picKey = ''; proBotPlan = null;
     layout();
     /* Stickers drop onto the sheet from the bottom layer up. */
     stickers.forEach(function (s, i) { s.spawn = reduced ? 1 : -i * 0.016; });
@@ -289,12 +289,15 @@
     dirx /= dl; diry /= dl;
     beginPeel(st, lx * 0.3, ly * 0.3, dirx, diry);
     st.auto = true;
+    st._byBot = !!botActing;
     var p = screenOf(st);
     spawnRing(p.x, p.y, D * k * 0.16, D * k * 0.48, 'rgba(255,255,255,.85)', 3, 0.22);
     Snd.peelTap();
   }
   function detach(st) {
     if (st.state !== 'board') return;
+    if (!st._byBot && !st._twinPulled) proBotPlan = null;
+    st._byBot = false;
     if (rules) {
       var result = preflight(st);
       if (!result.ok) { st.auto = false; st.spring = true; Snd.deny(); emit('scrapbookDeny', result.reason); return; }
@@ -308,7 +311,7 @@
       result.ids.forEach(function (id) {
         var s = stickers[id];
         if (s !== st) { beginPeel(s, 0, R * 0.6, 0, -1); s.peel = DETACH; s.F.y = s.A.y - DETACH * 2 * R; }
-        s.state = 'out'; s.peeling = false; s.auto = false; s.arrived = false; s.merge = false;
+        s.state = 'out'; s.peeling = false; s.auto = false; s.arrived = false; s.merge = false; s.preMerged = false; s.mergeBlocked = false;
         peeled++; history.push(id); s.revealed = true;
         if (guide && guide.id === id) guide = null;
         var at = -1;
@@ -324,7 +327,9 @@
         emit('peel', { id: id, type: s.type });
         lessonEvent('core');
       });
-      result.clears.forEach(function (type) { tray.filter(function (s) { return s.type === type && !s.merge; }).slice(0, 3).forEach(function (s) { s.merge = true; }); });
+      result.clears.forEach(function (type) {
+        tray.filter(function (s) { return s.type === type && !s.merge; }).slice(0, 3).forEach(function (s) { s.merge = true; s.preMerged = true; });
+      });
       Snd.detach(); buzz(10); refresh(); updateDanger(); hud(); staticDirty = true; return;
     }
     if (beltMode()) {
@@ -628,6 +633,7 @@
           s.landed = false;
         });
       }
+      proBotPlan = null;
       if (reduced) {
         on.forEach(function (s) { if (s.nextType !== undefined) { s.type = s.nextType; s.nextType = undefined; } });
         staticDirty = true;
@@ -658,12 +664,13 @@
   function useBooster(name) {
     if (state !== 'play' || !stickers.length) return false;
     var ok = Boosters[name] && Boosters[name]();
-    if (ok) { usedBoosters++; idle = 0; emit('booster', name); }
+    if (ok) { proBotPlan = null; usedBoosters++; idle = 0; emit('booster', name); }
     return !!ok;
   }
   /* Continue after a full tray: two extra slots for this sheet, at the cost of the star rating. */
   function continueWithSlots() {
     if (state !== 'lost') return false;
+    proBotPlan = null;
     usedContinue = true;
     state = 'play';
     ending = false;
@@ -861,17 +868,41 @@
   }
   function resolveTriples(dt) {
     if (rules) {
-      /* A triple the open spread couldn't take yet keeps checking, so turning the page releases it. */
-      var held = {}, told = false;
-      tray.forEach(function (s) { if (!s.merge && !s.inFlight) held[s.type] = (held[s.type] || 0) + 1; });
-      Object.keys(held).forEach(function (t) {
-        if (held[t] < 3) return;
+      /* A triple the Diorama dock or open spread couldn't take yet keeps checking, and unlocks when the spread turns. */
+      var arrivedByType = {}, told = false;
+      tray.forEach(function (s) {
+        if (s.state === 'tray' && s.arrived && !s.merge && !s.inFlight) (arrivedByType[s.type] = arrivedByType[s.type] || []).push(s);
+      });
+      Object.keys(blockedNotified).forEach(function (bt) {
+        if (!arrivedByType[bt] || arrivedByType[bt].length < 3) delete blockedNotified[bt];
+      });
+      tray.forEach(function (s) {
+        if (!s.merge && (!arrivedByType[s.type] || arrivedByType[s.type].length < 3)) s.mergeBlocked = false;
+      });
+      Object.keys(arrivedByType).forEach(function (t) {
+        var list = arrivedByType[t];
+        if (list.length < 3) return;
         if (!canBurst(+t)) {
-          if (!told) { told = true; if (!resolveTriples.heldAt || clock - resolveTriples.heldAt > 5) { resolveTriples.heldAt = clock; emit('toast', { key: 'waitNextPage' }); } }
+          if (cb.isCreditFull && cb.isCreditFull(+t)) {
+            list.forEach(function (s) {
+              s.merge = false; s.mergeT = 0; s.mergeSide = 0;
+              if (!s.mergeBlocked) { s.mergeBlocked = true; s.shake = 0.95; }
+            });
+            if (!blockedNotified[t]) {
+              blockedNotified[t] = true;
+              var midS = list[1];
+              Snd.deny(); buzz([20, 40, 20]);
+              floats.push({ x: midS.px, y: midS.py - 36, t: 0, text: '🔒 KỆ TRANG SAU ĐẦY!', big: true });
+              emit('mergeBlocked', { type: +t, x: midS.px, y: midS.py });
+            }
+          } else if (!told) {
+            told = true;
+            if (!resolveTriples.heldAt || clock - resolveTriples.heldAt > 5) { resolveTriples.heldAt = clock; emit('toast', { key: 'waitNextPage' }); }
+          }
           return;
         }
-        var got = 0;
-        tray.forEach(function (s) { if (got < 3 && !s.merge && !s.inFlight && s.type === +t) { s.merge = true; s.mergeT = 0; got++; } });
+        list.slice(0, 3).forEach(function (s) { s.merge = true; s.mergeT = s.mergeT || 0; s.mergeBlocked = false; });
+        delete blockedNotified[t];
       });
       var groupsR = {};
       tray.forEach(function (s) { if (s.merge) (groupsR[s.type] = groupsR[s.type] || []).push(s); });
@@ -891,12 +922,14 @@
             s.px += (midR.px - s.px) * Math.min(1, dt * 22);
           });
           if (g[0].mergeT < 1) break;
+          var wasPreMerged = g.every(function (s) { return !!s.preMerged; });
           g.forEach(function (s) {
             tray.splice(tray.indexOf(s), 1);
             s.state = 'done';
             var hi = history.indexOf(s.id);
             if (hi >= 0) history.splice(hi, 1);
           });
+          if (!wasPreMerged && Core.recordRuleBurst) Core.recordRuleBurst(rules, +t);
           triplesDone++;
           merges++; staticDirty = true; refresh();
           combo = clock - lastClear < 7 ? combo + 1 : 1;
@@ -1597,18 +1630,8 @@
     ctx.drawImage(sp.shadow, -size / 2, -size / 2, size, size);
     if (s.state === 'fly' && t < 0.5) ctx.drawImage(sp.back, -size / 2, -size / 2, size, size);
     else ctx.drawImage(sp.front, -size / 2, -size / 2, size, size);
-    if (rules && !concealed && s.state === 'tray' && !s.merge && heldTypes[s.type] && !canBurst(s.type)) {
-      ctx.globalAlpha = 0.4;
-      ctx.drawImage(sp.dim, -size / 2, -size / 2, size, size);
-      ctx.globalAlpha = 1;
-      var bw = size * 0.62, bh = size * 0.3;
-      ctx.fillStyle = 'rgba(42,36,56,.92)';
-      ctx.beginPath(); ctx.roundRect(-bw / 2, -bh / 2, bw, bh, bh / 2); ctx.fill();
-      ctx.fillStyle = '#FFD654';
-      ctx.font = '800 ' + Math.round(size * 0.18) + 'px "Baloo 2",system-ui,sans-serif';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText('»»', 0, size * 0.012);
-    } else if (s.mergeBlocked && s.state === 'tray') {
+    /* A complete triple that is merge-blocked shows 🔒 ĐẦY; otherwise while flipping it shows »». */
+    if (s.mergeBlocked && s.state === 'tray') {
       ctx.fillStyle = '#E11D48';
       ctx.beginPath();
       ctx.roundRect(-size * 0.36, size * 0.18, size * 0.72, size * 0.24, 5);
@@ -1621,6 +1644,17 @@
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('🔒 ĐẦY', 0, size * 0.305);
+    } else if (rules && !concealed && s.state === 'tray' && !s.merge && heldTypes[s.type] && !canBurst(s.type)) {
+      ctx.globalAlpha = 0.4;
+      ctx.drawImage(sp.dim, -size / 2, -size / 2, size, size);
+      ctx.globalAlpha = 1;
+      var bw = size * 0.62, bh = size * 0.3;
+      ctx.fillStyle = 'rgba(42,36,56,.92)';
+      ctx.beginPath(); ctx.roundRect(-bw / 2, -bh / 2, bw, bh, bh / 2); ctx.fill();
+      ctx.fillStyle = '#FFD654';
+      ctx.font = '800 ' + Math.round(size * 0.18) + 'px "Baloo 2",system-ui,sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('»»', 0, size * 0.012);
     }
     ctx.restore();
   }
@@ -2083,6 +2117,483 @@
   }
   function configure(o) { for (var key in o) settings[key] = o[key]; }
 
+  /* ---------- Smart AI Bot (Pro & Campaign) ---------- */
+  function buildBotSimPro() {
+    var bs = cb.bookState ? cb.bookState() : null;
+    var removed = {}, tMap = {}, tTotal = 0;
+    for (var i = 0; i < stickers.length; i++) if (!onSheet(stickers[i])) removed[i] = true;
+    for (var j = 0; j < tray.length; j++) {
+      if (tray[j].merge) continue;
+      tMap[tray[j].type] = (tMap[tray[j].type] || 0) + 1;
+      tTotal++;
+    }
+    var ow = {}, lw = {}, cr = {};
+    if (bs) {
+      for (var ok in bs.openWant) if (bs.openWant[ok] > 0) ow[ok] = bs.openWant[ok];
+      for (var lk in bs.laterWant) if (bs.laterWant[lk] > 0) lw[lk] = bs.laterWant[lk];
+      for (var ck in bs.credit) if (bs.credit[ck] > 0) cr[ck] = bs.credit[ck];
+    }
+    return {
+      removed: removed, tray: tMap, trayTotal: tTotal, peak: tTotal,
+      peeled: peeled, merges: merges, cleared: stickers.length - Object.keys(removed).length,
+      spread: bs ? bs.shown : 0, spreads: bs ? bs.spreads : 1,
+      openWant: ow, laterWant: lw, credit: cr,
+      pocketUsed: bs ? bs.pocketUsed : 0, pocketMax: bs ? bs.pocketMax : 99,
+      missions: bs ? bs.missions : null, decoys: bs ? bs.decoys : []
+    };
+  }
+  function cloneSimPro(s) {
+    var rem = {}, tr = {}, ow = {}, lw = {}, cr = {};
+    for (var k in s.removed) rem[k] = true;
+    for (var k2 in s.tray) tr[k2] = s.tray[k2];
+    for (var k3 in s.openWant) ow[k3] = s.openWant[k3];
+    for (var k4 in s.laterWant) lw[k4] = s.laterWant[k4];
+    for (var k5 in s.credit) cr[k5] = s.credit[k5];
+    return {
+      removed: rem, tray: tr, trayTotal: s.trayTotal, peak: s.peak,
+      peeled: s.peeled, merges: s.merges, cleared: s.cleared,
+      spread: s.spread, spreads: s.spreads,
+      openWant: ow, laterWant: lw, credit: cr,
+      pocketUsed: s.pocketUsed, pocketMax: s.pocketMax,
+      missions: s.missions, decoys: s.decoys
+    };
+  }
+  function canSimMergePro(sim, type) {
+    if (!sim.missions) return true;
+    if ((sim.openWant[type] || 0) > 0) return true;
+    if ((sim.laterWant[type] || 0) > 0) return sim.pocketUsed < sim.pocketMax;
+    return true;
+  }
+  function flushSimPro(sim) {
+    var progressed = true;
+    while (progressed) {
+      progressed = false;
+      var keys = Object.keys(sim.tray);
+      for (var i = 0; i < keys.length; i++) {
+        var t = +keys[i];
+        while (sim.tray[t] >= 3) {
+          var canOpen = (sim.openWant[t] || 0) > 0;
+          var canLater = !canOpen && (sim.laterWant[t] || 0) > 0;
+          var canShelf = canLater && sim.pocketUsed < sim.pocketMax;
+          if (!canOpen && canLater && !canShelf && sim.missions) break;
+          sim.tray[t] -= 3;
+          if (!sim.tray[t]) delete sim.tray[t];
+          sim.trayTotal -= 3;
+          sim.merges++;
+          progressed = true;
+          if (canOpen) {
+            sim.openWant[t]--;
+            if (!sim.openWant[t]) delete sim.openWant[t];
+          } else if (canShelf) {
+            sim.credit[t] = (sim.credit[t] || 0) + 1;
+            if (sim.laterWant[t] > 0) sim.laterWant[t]--;
+            sim.pocketUsed++;
+          }
+          while (sim.missions && Object.keys(sim.openWant).length === 0 && sim.spread + 1 < sim.spreads) {
+            sim.spread++;
+            for (var side = 0; side < 2; side++) {
+              var pg = sim.missions[sim.spread * 2 + side] || [];
+              for (var k = 0; k < pg.length; k++) {
+                var mt = pg[k];
+                if ((sim.credit[mt] || 0) > 0) {
+                  sim.credit[mt]--;
+                  sim.pocketUsed = Math.max(0, sim.pocketUsed - 1);
+                } else {
+                  sim.openWant[mt] = (sim.openWant[mt] || 0) + 1;
+                  if ((sim.laterWant[mt] || 0) > 0) sim.laterWant[mt]--;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  function isLegalSimPro(sim, st) {
+    if (sim.removed[st.id]) return false;
+    if (st.lock > sim.peeled || (st.tape && st.tape > sim.merges)) return false;
+    for (var i = 0; i < st.blockers.length; i++) if (!sim.removed[st.blockers[i]]) return false;
+    return true;
+  }
+  function applySimPro(sim, st) {
+    sim.removed[st.id] = true;
+    sim.tray[st.type] = (sim.tray[st.type] || 0) + 1;
+    sim.trayTotal++;
+    sim.peeled++;
+    if (st.twin >= 0 && !sim.removed[st.twin]) {
+      var tw = stickers[st.twin];
+      if (tw && (sim.trayTotal <= cap || (sim.tray[tw.type] || 0) >= 2)) {
+        sim.removed[tw.id] = true;
+        sim.tray[tw.type] = (sim.tray[tw.type] || 0) + 1;
+        sim.trayTotal++;
+        sim.peeled++;
+      }
+    }
+    sim.peak = Math.max(sim.peak, sim.trayTotal);
+    flushSimPro(sim);
+  }
+  function scoreProCandidate(sim, st, availByType, nextTapeTarget, revealedMap) {
+    var have = sim.tray[st.type] || 0;
+    var tw = (st.twin >= 0 && !sim.removed[st.twin]) ? stickers[st.twin] : null;
+    var canM = canSimMergePro(sim, st.type);
+    var openRem = 0;
+    for (var ok in sim.openWant) openRem += sim.openWant[ok];
+
+    var willMerge = (have >= 2 && canM) || (tw && tw.type === st.type && have >= 1 && canM);
+    var delta = tw ? 2 : 1;
+    if (have >= 2 && canM) delta -= 3;
+    if (tw) {
+      if (tw.type === st.type && have === 1 && canM) delta = -1;
+      else if ((sim.tray[tw.type] || 0) >= 2 && canSimMergePro(sim, tw.type)) delta -= 3;
+    }
+    var newTotal = sim.trayTotal + delta;
+    var freeAfter = cap - newTotal;
+    if (freeAfter <= 0) return -1e9;
+
+    var sc = 0;
+    if (willMerge) {
+      sc += 5600;
+      if ((sim.openWant[st.type] || 0) > 0) sc += openRem <= 1 ? 7500 : 4600;
+      else if ((sim.laterWant[st.type] || 0) > 0) sc += 1100 + (sim.trayTotal >= 4 ? 1900 : 0) - (sim.pocketMax - sim.pocketUsed <= 1 ? 450 : 0);
+      else sc += 1900;
+      if (nextTapeTarget && sim.merges + 1 >= nextTapeTarget) sc += 1600;
+    } else {
+      var wantOpen = (sim.openWant[st.type] || 0) > 0;
+      var exposed = availByType[st.type] || 0;
+      if (have >= 2 && !canM) sc -= 5600;
+      else if (have === 1) {
+        if (!canM) sc -= 2600;
+        else if (exposed >= 2) sc += 2500 + (wantOpen ? 1600 : 0);
+        else sc += 800 + (wantOpen ? 600 : 0);
+      } else {
+        if (!canM) sc -= 1800;
+        else if (wantOpen) sc += (exposed >= 3 ? 1200 : exposed === 2 ? 420 : 40);
+        else sc -= 150;
+      }
+      if (freeAfter === 1) sc -= 7500;
+      else if (freeAfter === 2) sc -= 1600;
+      else if (freeAfter === 3) sc -= 350;
+    }
+    if (tw && !(tw.type === st.type && have === 1 && canM)) {
+      var twHave = sim.tray[tw.type] || 0;
+      if (twHave >= 2 && canSimMergePro(sim, tw.type)) sc += 3200;
+      else if ((sim.openWant[tw.type] || 0) > 0) sc += 400;
+      else sc -= 450;
+    }
+    /* Prefer peeling tiles that unlock buried stickers helpful for the tray or current spread. */
+    for (var bi = 0; bi < st.blocks.length; bi++) {
+      var b = stickers[st.blocks[bi]];
+      if (!b || sim.removed[b.id]) continue;
+      var otherBlocked = false;
+      for (var kj = 0; kj < b.blockers.length; kj++) {
+        var blkId = b.blockers[kj];
+        if (blkId !== st.id && !sim.removed[blkId]) { otherBlocked = true; break; }
+      }
+      if (!otherBlocked) {
+        var known = !b.mystery || b.revealed || (revealedMap && revealedMap[b.id]);
+        if (!known) sc += 220;
+        else {
+          var bt = b.type;
+          sc += 240;
+          if ((sim.tray[bt] || 0) >= 1 && canSimMergePro(sim, bt)) sc += 850;
+          if ((sim.openWant[bt] || 0) > 0) sc += 460;
+        }
+      }
+    }
+    return sc;
+  }
+  function beamProSearch(rootSim) {
+    var total = stickers.length, BEAM_W = 34, BRANCH_B = 8;
+    var beam = [{ sim: rootSim, path: [], sc: 0 }];
+    var bestSurvive = beam[0];
+    for (var depth = 0; depth < total; depth++) {
+      var nextBeam = [], seenSig = {};
+      for (var bi = 0; bi < beam.length; bi++) {
+        var node = beam[bi], sim = node.sim;
+        var avail = [], availByT = {}, minTape = 0;
+        for (var k = 0; k < total; k++) {
+          var st = stickers[k];
+          if (sim.removed[st.id]) continue;
+          if (st.tape && st.tape > sim.merges && (!minTape || st.tape < minTape)) minTape = st.tape;
+          if (isLegalSimPro(sim, st)) {
+            avail.push(st);
+            availByT[st.type] = (availByT[st.type] || 0) + 1;
+          }
+        }
+        if (!avail.length) continue;
+        var scored = [];
+        for (var a = 0; a < avail.length; a++) {
+          var mv = avail[a];
+          scored.push({ st: mv, sc: scoreProCandidate(sim, mv, availByT, minTape, sim.removed) });
+        }
+        scored.sort(function (x, y) { return y.sc - x.sc; });
+        var branchTaken = 0, usedLeaf = {};
+        for (var m = 0; m < scored.length && branchTaken < BRANCH_B; m++) {
+          if (scored[m].sc <= -5e8) break;
+          var stMove = scored[m].st;
+          if (stMove.blocks.length === 0 && stMove.twin < 0) {
+            if (usedLeaf[stMove.type]) continue;
+            usedLeaf[stMove.type] = true;
+          }
+          branchTaken++;
+          var cs = cloneSimPro(sim);
+          applySimPro(cs, stMove);
+          if (cs.trayTotal >= cap) continue;
+          var remCount = 0, trayParts = [];
+          for (var r = 0; r < total; r++) if (!cs.removed[r]) remCount++;
+          var newPath = node.path.concat([stMove.id]);
+          if (remCount === 0) return { win: true, path: newPath };
+          var tKeys = Object.keys(cs.tray).sort();
+          for (var tk = 0; tk < tKeys.length; tk++) trayParts.push(tKeys[tk] + ':' + cs.tray[tKeys[tk]]);
+          var stateSig = trayParts.join(',') + '|' + cs.spread + '|' + cs.pocketUsed + '|' + remCount + '|' + cs.merges;
+          var fScore = (total - remCount) * 850 + cs.merges * 3400 + cs.spread * 28000 - cs.peak * 1400 - cs.trayTotal * 260 + scored[m].sc * 0.05;
+          if (seenSig[stateSig] !== undefined && seenSig[stateSig] >= fScore) continue;
+          seenSig[stateSig] = fScore;
+          nextBeam.push({ sim: cs, path: newPath, sc: fScore, rem: remCount });
+        }
+      }
+      if (!nextBeam.length) break;
+      nextBeam.sort(function (x, y) { return y.sc - x.sc; });
+      if (nextBeam.length > BEAM_W) nextBeam.length = BEAM_W;
+      beam = nextBeam;
+      bestSurvive = beam[0];
+    }
+    return { win: false, path: bestSurvive ? bestSurvive.path : null };
+  }
+  function chooseProStep() {
+    if (proBotPlan && proBotPlan.length) {
+      var pid = proBotPlan[0], pst = stickers[pid];
+      if (pst && pst.state === 'board' && !pst.peeling && !pst.blocked && !pst.locked && canAdd(pst)) {
+        proBotPlan.shift();
+        botActing = true;
+        autoPeel(pst, R * 0.6, R * 0.6);
+        botActing = false;
+        return pst.id;
+      }
+      proBotPlan = null;
+    }
+    var avail = [], availByT = {}, minTape = 0;
+    for (var i = 0; i < stickers.length; i++) {
+      var st = stickers[i];
+      if (st.state !== 'board' || st.peeling) continue;
+      if (st.tape && st.tape > merges && (!minTape || st.tape < minTape)) minTape = st.tape;
+      if (!st.blocked && !st.locked) {
+        avail.push(st);
+        availByT[st.type] = (availByT[st.type] || 0) + 1;
+      }
+    }
+    if (!avail.length) return stickers.some(function (s) { return s.state === 'out' || s.state === 'fly' || s.peeling; }) ? 'wait' : null;
+    var rootSim = buildBotSimPro();
+    var res = beamProSearch(rootSim), plan = res && res.path;
+    var pickId = (plan && plan.length) ? plan[0] : null;
+    if (pickId === null) {
+      var ranked = avail.map(function (st) {
+        return { st: st, sc: scoreProCandidate(rootSim, st, availByT, minTape, {}) };
+      }).sort(function (a, b) { return b.sc - a.sc; });
+      pickId = ranked[0].st.id;
+    } else if (res.win && plan.length > 1) {
+      proBotPlan = plan.slice(1);
+    }
+    var chosen = stickers[pickId];
+    if (!chosen || !canAdd(chosen)) return 'wait';
+    botActing = true;
+    autoPeel(chosen, R * 0.6, R * 0.6);
+    botActing = false;
+    return chosen.id;
+  }
+
+  /* Smart Campaign Bot: uses live Core.transition + lookahead across flaps, papers, keys, glues, duos, and Standing Shelf cap. */
+  function fastRuleEligible(s, t) {
+    if (s.removed[t.id]) return false;
+    if (t.lock > s.peeled || (t.tape && t.tape > s.merges)) return false;
+    if (t.flap != null && t.flap === s.flap) return false;
+    if (t.group && !s.opened[t.group]) return false;
+    for (var i = 0; i < t.blockers.length; i++) if (!s.removed[t.blockers[i]]) return false;
+    return true;
+  }
+  function countOpenMissionSlots(s) {
+    var open = {};
+    if (!s.missions) return open;
+    for (var side = 0; side < 2; side++) {
+      var pg = s.spread * 2 + side;
+      var list = s.missions[pg] || [], fl = s.filled[pg] || [];
+      for (var k = 0; k < list.length; k++) if (!fl[k]) open[list[k]] = (open[list[k]] || 0) + 1;
+    }
+    return open;
+  }
+  function countRemainingHolders(s) {
+    var total = 0;
+    for (var i = 0; i < (s.covers || []).length; i++) {
+      var c = s.covers[i];
+      if (!s.coverOpened[c.id]) {
+        for (var h = 0; h < c.holders.length; h++) if (!s.removed[c.holders[h]]) total++;
+      }
+    }
+    return total;
+  }
+  function scoreCampaignMove(s, act, r) {
+    var ns = r.state, freeAfter = s.cap - ns.tray.length;
+    if (freeAfter <= 0) return -1e9;
+    var sc = 0;
+    var coversBefore = Object.keys(s.coverOpened).length, coversAfter = Object.keys(ns.coverOpened).length;
+    var keysBefore = Object.keys(s.opened).length, keysAfter = Object.keys(ns.opened).length;
+    if (ns.spread > s.spread) sc += 7000;
+    if (r.clears.length > 0) {
+      var openMap = countOpenMissionSlots(s);
+      sc += 5500;
+      for (var ci = 0; ci < r.clears.length; ci++) sc += (openMap[r.clears[ci]] || 0) > 0 ? 3200 : 1000;
+    }
+    if (coversAfter > coversBefore) sc += 3400 * (coversAfter - coversBefore);
+    if (keysAfter > keysBefore) sc += 3600 * (keysAfter - keysBefore);
+    var holdDiff = countRemainingHolders(s) - countRemainingHolders(ns);
+    if (holdDiff > 0) sc += 750 * holdDiff;
+
+    if (act.type === 'peel') {
+      var tl = s.tiles[act.id], have = 0;
+      for (var ti = 0; ti < s.tray.length; ti++) if (s.tray[ti] === tl.type) have++;
+      var openNow = countOpenMissionSlots(s);
+      if (r.clears.length === 0) {
+        if (have >= 2) sc -= 4800; // Triple blocked in tray because Standing Shelf is full!
+        else if (have === 1) sc += (openNow[tl.type] || 0) > 0 ? 2200 : 900;
+        else sc += (openNow[tl.type] || 0) > 0 ? 320 : -120;
+      }
+      if (tl.duo != null && s.tiles[tl.duo] && !s.removed[tl.duo]) {
+        var mateT = s.tiles[tl.duo].type, mateHave = 0;
+        for (var mj = 0; mj < s.tray.length; mj++) if (s.tray[mj] === mateT) mateHave++;
+        if (mateHave >= 2) sc += 2000;
+      }
+      if (freeAfter === 1 && !r.clears.length) sc -= 6500;
+      else if (freeAfter === 2 && !r.clears.length) sc -= 1400;
+      for (var bi = 0; bi < tl.blocks.length; bi++) {
+        var bt = s.tiles[tl.blocks[bi]];
+        if (!bt || ns.removed[bt.id]) continue;
+        if (!bt.mystery || ns.revealed[bt.id]) sc += (openNow[bt.type] || 0) > 0 ? 360 : 180;
+        else sc += 160;
+      }
+    }
+    return sc;
+  }
+  function bestCurSc(cands) {
+    var b = -1e12;
+    for (var i = 0; i < cands.length; i++) if (cands[i].sc > b) b = cands[i].sc;
+    return b;
+  }
+  function rolloutCampaign(startState, maxSteps) {
+    var s = startState, peak = s.tray.length, lastToggle = false;
+    for (var step = 0; step < maxSteps; step++) {
+      var seenSig = {}, cands = [];
+      for (var i = 0; i < s.tiles.length; i++) {
+        var t = s.tiles[i];
+        if (!fastRuleEligible(s, t)) continue;
+        var sig = t.type + '_' + (t.key || '') + '_' + (t.duo != null ? 1 : 0) + '_' + (t.blocks.length ? 1 : 0);
+        if (seenSig[sig]) continue;
+        var act = { type: 'peel', id: t.id };
+        var r = Core.transition(s, act);
+        if (!r.ok) continue;
+        seenSig[sig] = true;
+        cands.push({ act: act, r: r, sc: scoreCampaignMove(s, act, r) });
+      }
+      if (level.cfg.scrapbook && level.cfg.scrapbook.flap && !lastToggle && (!cands.length || bestCurSc(cands) < 400)) {
+        var tr = Core.transition(s, { type: 'toggle' });
+        if (tr.ok) {
+          var altBest = -1e12, ts = tr.state;
+          for (var j = 0; j < ts.tiles.length; j++) {
+            var tt = ts.tiles[j];
+            if (!fastRuleEligible(ts, tt)) continue;
+            var ar = Core.transition(ts, { type: 'peel', id: tt.id });
+            if (ar.ok) altBest = Math.max(altBest, scoreCampaignMove(ts, { type: 'peel', id: tt.id }, ar));
+          }
+          if (!cands.length || altBest > bestCurSc(cands) + 350) {
+            s = tr.state; lastToggle = true; continue;
+          }
+        }
+      }
+      if (!cands.length) break;
+      lastToggle = false;
+      cands.sort(function (a, b) { return b.sc - a.sc; });
+      var pick = cands[0];
+      if (pick.sc <= -5e8) break;
+      s = pick.r.state;
+      peak = Math.max(peak, s.tray.length);
+      if (s.tray.length >= s.cap) break;
+    }
+    var removedCount = 0;
+    for (var k = 0; k < s.removed.length; k++) if (s.removed[k]) removedCount++;
+    return {
+      win: removedCount === s.tiles.length && s.tray.length === 0,
+      removed: removedCount, spread: s.spread, merges: s.merges, peak: peak,
+      alive: s.tray.length < s.cap
+    };
+  }
+  function chooseCampaignStep() {
+    if (scrapbookBusy()) return 'wait';
+    var snap = ruleSnapshot();
+    var leftOnSheet = 0;
+    for (var i = 0; i < stickers.length; i++) if (stickers[i].state === 'board' && !stickers[i].peeling) leftOnSheet++;
+    if (!leftOnSheet) return null;
+
+    var liveGate = function (type, clears) { return !cb.canClearCount ? canBurst(type) : cb.canClearCount(type, clears); };
+    var allLegal = [], seenSig = {}, candidates = [];
+    for (var j = 0; j < stickers.length; j++) {
+      var st = stickers[j];
+      if (st.state !== 'board' || st.peeling) continue;
+      var tSpec = snap.tiles[st.id];
+      if (!fastRuleEligible(snap, tSpec)) continue;
+      var act = { type: 'peel', id: st.id };
+      var res = Core.transition(snap, act, liveGate);
+      if (!res.ok) continue;
+      var sc = scoreCampaignMove(snap, act, res);
+      allLegal.push({ act: act, r: res, sc: sc });
+    }
+    allLegal.sort(function (a, b) { return b.sc - a.sc; });
+    for (var k = 0; k < allLegal.length && candidates.length < 5; k++) {
+      var cand = allLegal[k], tl = snap.tiles[cand.act.id];
+      var sig = tl.type + '_' + (tl.key || '') + '_' + (tl.duo != null ? 1 : 0);
+      if (seenSig[sig]) continue;
+      seenSig[sig] = true;
+      candidates.push(cand);
+    }
+    /* Include valid witness action cleanly in evaluation pool if legally playable now. */
+    var wAct = Core.nextWitnessAction(level, snap);
+    if (wAct && wAct.type === 'peel' && stickers[wAct.id].state === 'board' && !stickers[wAct.id].peeling) {
+      var wRes = Core.transition(snap, wAct, liveGate);
+      if (wRes.ok && !candidates.some(function (c) { return c.act.id === wAct.id; })) {
+        candidates.push({ act: wAct, r: wRes, sc: scoreCampaignMove(snap, wAct, wRes) + 50, witness: true });
+      }
+    }
+    /* Check whether toggling the two-sided flap reveals clearly stronger moves or is needed when stuck. */
+    if (level.cfg.scrapbook && level.cfg.scrapbook.flap) {
+      var togRes = Core.transition(snap, { type: 'toggle' });
+      if (togRes.ok) {
+        var bestAltSc = -1e12, ts = togRes.state;
+        for (var m = 0; m < ts.tiles.length; m++) {
+          if (!fastRuleEligible(ts, ts.tiles[m])) continue;
+          var aRes = Core.transition(ts, { type: 'peel', id: ts.tiles[m].id });
+          if (aRes.ok) bestAltSc = Math.max(bestAltSc, scoreCampaignMove(ts, { type: 'peel', id: ts.tiles[m].id }, aRes));
+        }
+        var curTop = allLegal.length ? allLegal[0].sc : -1e12;
+        if (!allLegal.length || (wAct && wAct.type === 'toggle') || bestAltSc > curTop + 450) {
+          candidates.push({ act: { type: 'toggle' }, r: togRes, sc: bestAltSc - 80 });
+        }
+      }
+    }
+    if (!candidates.length) return null;
+
+    var bestPick = candidates[0], bestRank = -1e15, horizon = snap.tiles.length + 12;
+    for (var q = 0; q < candidates.length; q++) {
+      var item = candidates[q];
+      var ro = rolloutCampaign(item.r.state, horizon);
+      var rank = (ro.win ? 1e9 : ro.alive ? ro.removed * 1e4 + ro.spread * 2e5 : -1e8) - ro.peak * 2000 + item.sc * 0.01;
+      if (rank > bestRank) { bestRank = rank; bestPick = item; }
+      if (ro.win && ro.peak <= snap.cap - 2 && item.sc >= 0 && q === 0) break;
+    }
+    if (bestPick.act.type === 'toggle') return toggleFlap() ? 'toggle' : 'wait';
+    var pickedTile = stickers[bestPick.act.id];
+    if (!pickedTile || !canAdd(pickedTile)) return 'wait';
+    autoPeel(pickedTile, R * 0.6, R * 0.6);
+    return pickedTile.id;
+  }
+
   PO.Game = {
     bind: bind, start: start, stop: stop, setPaused: setPaused, useBooster: useBooster, configure: configure,
     continueWithSlots: continueWithSlots, canUndo: canUndo,
@@ -2169,11 +2680,12 @@
         extra.forEach(function (s) { s.type = targetType; spriteOf(targetType); picks.push(s); });
       }
       if (picks.length < need) return false;
-      var canM = !cb.canMerge || cb.canMerge(targetType);
+      var canM = rules ? canBurst(targetType) : (!cb.canMerge || cb.canMerge(targetType));
       var coreX = W / 2, coreY = trayY + slot / 2 + 8;
       delete blockedNotified[targetType];
       picks.forEach(function (s, i) {
         s.tape = false; s.lock = 0; s.revealed = true; s.twin = -1; s.A = null; s.F = null;
+        if (rules) { rules.removed[s.id] = true; s.revealed = true; }
         var p = screenOf(s);
         addLightning(coreX, coreY, p.x, p.y, canM ? '#FFD531' : '#FF5A6E', 0.42);
         shockwaves.push({ x: p.x, y: p.y, r0: 6, r1: D * k * 0.85, t: 0, dur: 0.38, c: canM ? '#FFD531' : '#FF5A6E', w: 4.5 });
@@ -2185,41 +2697,25 @@
         if (at >= 0) tray.splice(at + 1, 0, s); else tray.push(s);
         s.arrived = false;
         s.merge = canM;
+        s.preMerged = !!(rules && canM);
         s.mergeBlocked = false;
         startFly(s, p.x, p.y);
         s.flyT = -i * 0.05;
       });
-      if (canM) tray.forEach(function (s) { if (s.type === targetType) s.merge = true; });
+      if (rules) {
+        Core.revealRules(rules);
+        if (canM && Core.recordRuleBurst) Core.recordRuleBurst(rules, targetType);
+      }
+      if (canM) tray.forEach(function (s) { if (s.type === targetType) { s.merge = true; if (rules) s.preMerged = true; } });
       screenShake = 0.6;
       Snd.magic ? Snd.magic() : Snd.power();
       refresh(); updateDanger(); hud();
       return true;
     },
-    /* Test hook: peel the next sticker from the level's proof order. */
+    /* Smart AI Bot: solves both Pro Mode and 50-level Campaign Mode legally with live lookahead, zero cheating. */
     debugStep: function () {
       if (state !== 'play') return state;
-      if (rules) {
-        if (scrapbookBusy()) return 'wait';
-        var action = Core.nextWitnessAction(level, ruleSnapshot());
-        if (!action) return null;
-        if (action.type === 'toggle') return toggleFlap() ? 'toggle' : 'wait';
-        var tile = stickers[action.id];
-        if (tile.state !== 'board') return 'wait';
-        if (!canAdd(tile)) return 'wait';
-        autoPeel(tile, R * 0.6, R * 0.6); return tile.id;
-      }
-      var sol = level.solution;
-      for (var i = 0; i < sol.length; i++) {
-        var s = stickers[sol[i]];
-        if (s.state === 'board' && !s.peeling) {
-          s.tape = false;
-          if (s.locked) s.lock = 0;
-          refresh();
-          autoPeel(s, R * 0.6, R * 0.6);
-          return s.id;
-        }
-      }
-      return null;
+      return rules ? chooseCampaignStep() : chooseProStep();
     },
     debugState: function () {
       return {

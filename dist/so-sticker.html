@@ -338,9 +338,11 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
   box-shadow: 0 2px 0 #2A2438; text-align: center;
 }
 .tut-viz {
+  flex: none; width: 100%; height: 104px; min-height: 104px;
   display: flex; justify-content: center; align-items: center;
   margin: 2px 0; border-radius: 14px; overflow: hidden;
 }
+.tut-viz canvas { display: block; flex: none; width: 290px; height: 104px; }
 #play .art-card.bump { animation: book-bump .32s cubic-bezier(.2,1.5,.45,1); }
 @keyframes book-bump {
   0% { transform: translateY(0) scale(1); }
@@ -639,8 +641,80 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
   }
   function createRuleState(level) {
     return revealRules({ tiles: level.stickers, covers: level.covers || [], coverOpened: {}, coverOpening: {}, removed: [], revealed: [], opened: {}, tray: [], merges: 0,
+      credit: {}, pocketCap: level.cfg.pocketCap || 2,
       peeled: 0, cap: BASE_CAP, flap: 0, spread: 0, missions: level.cfg.missions || [], decoys: level.cfg.decoys || [],
       filled: (level.cfg.missions || []).map(function (p) { return p.map(function () { return false; }); }) });
+  }
+  function laterRoomOf(s, type) {
+    var need = 0;
+    for (var p = (s.spread + 1) * 2; p < s.missions.length; p++) {
+      for (var k = 0; k < s.missions[p].length; k++) if (s.missions[p][k] === type) need++;
+    }
+    return Math.max(0, need - ((s.credit && s.credit[type]) || 0));
+  }
+  function creditUsed(s) {
+    var sum = 0;
+    if (s.credit) Object.keys(s.credit).forEach(function (k) { sum += s.credit[k] || 0; });
+    return sum;
+  }
+  function drainReadyTrayTriples(n) {
+    var settled = true;
+    while (settled) {
+      settled = false;
+      var seen = {};
+      n.tray.forEach(function (v) { seen[v] = (seen[v] || 0) + 1; });
+      var types = Object.keys(seen);
+      for (var ti = 0; ti < types.length; ti++) {
+        var t = +types[ti];
+        if (seen[t] < 3) continue;
+        var page = -1, slot = -1;
+        for (var p = n.spread * 2; p < Math.min(n.missions.length, n.spread * 2 + 2) && page < 0; p++) {
+          for (var k = 0; k < n.missions[p].length; k++) if (n.missions[p][k] === t && !n.filled[p][k]) { page = p; slot = k; break; }
+        }
+        if (page >= 0) {
+          n.filled[page][slot] = true;
+        } else if (laterRoomOf(n, t) > 0 && creditUsed(n) < (n.pocketCap || 2)) {
+          n.credit[t] = (n.credit[t] || 0) + 1;
+        } else {
+          continue;
+        }
+        var rem = 3;
+        n.tray = n.tray.filter(function (v) { if (v === t && rem) { rem--; return false; } return true; });
+        n.merges++;
+        settled = true;
+        break;
+      }
+      while (n.spread * 2 + 2 < n.missions.length && n.filled.slice(n.spread * 2, n.spread * 2 + 2).every(function (p) { return p.every(Boolean); })) {
+        n.spread++;
+        for (var sp = n.spread * 2; sp < Math.min(n.missions.length, n.spread * 2 + 2); sp++) {
+          for (var sk = 0; sk < n.missions[sp].length; sk++) {
+            var st = n.missions[sp][sk];
+            if (!n.filled[sp][sk] && n.credit[st] > 0) { n.credit[st]--; n.filled[sp][sk] = true; }
+          }
+        }
+        settled = true;
+      }
+    }
+  }
+  function recordRuleBurst(s, type) {
+    if (!s || !s.missions || !s.missions.length) return;
+    if (!s.credit) s.credit = {};
+    var page = -1, slot = -1;
+    for (var p = s.spread * 2; p < Math.min(s.missions.length, s.spread * 2 + 2) && page < 0; p++) {
+      for (var k = 0; k < s.missions[p].length; k++) if (s.missions[p][k] === type && !s.filled[p][k]) { page = p; slot = k; break; }
+    }
+    if (page >= 0) s.filled[page][slot] = true;
+    else if (laterRoomOf(s, type) > 0) s.credit[type] = (s.credit[type] || 0) + 1;
+    while (s.spread * 2 + 2 < s.missions.length && s.filled.slice(s.spread * 2, s.spread * 2 + 2).every(function (p) { return p.every(Boolean); })) {
+      s.spread++;
+      for (var sp = s.spread * 2; sp < Math.min(s.missions.length, s.spread * 2 + 2); sp++) {
+        for (var sk = 0; sk < s.missions[sp].length; sk++) {
+          var st = s.missions[sp][sk];
+          if (!s.filled[sp][sk] && s.credit[st] > 0) { s.credit[st]--; nFill(s, sp, sk); }
+        }
+      }
+    }
+    function nFill(stObj, spIdx, skIdx) { stObj.filled[spIdx][skIdx] = true; }
   }
   function ruleAccess(s, t) {
     if (!t || s.removed[t.id]) return 'removed';
@@ -664,6 +738,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
       if (s.tray.length + ids.length > s.cap) return { ok: false, reason: 'capacity' };
     } else if (action.type !== 'toggle') return { ok: false, reason: 'action' };
     var n = Object.assign({}, s, { removed: s.removed.slice(), revealed: s.revealed.slice(),
+      credit: Object.assign({}, s.credit || {}),
       opened: Object.assign({}, s.opened), coverOpened: Object.assign({}, s.coverOpened), coverOpening: Object.assign({}, s.coverOpening), tray: s.tray.slice(), filled: s.filled.map(function (p) { return p.slice(); }) });
     if (action.type === 'toggle') { n.flap = 1 - n.flap; return { ok: true, state: revealRules(n), ids: [], clears: [] }; }
     for (var j = 0; j < ids.length; j++) {
@@ -673,18 +748,35 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
       n.tray.push(type);
       if (n.tray.filter(function (v) { return v === type; }).length < 3) continue;
       var page = -1, slot = -1;
-      if (gate && !gate(type, clears)) return { ok: false, reason: 'page' };
       for (var p = n.spread * 2; p < Math.min(n.missions.length, n.spread * 2 + 2) && page < 0; p++) {
         for (var k = 0; k < n.missions[p].length; k++) if (n.missions[p][k] === type && !n.filled[p][k]) { page = p; slot = k; break; }
       }
-      if (n.missions.length && page < 0 && n.decoys.indexOf(type) < 0) return { ok: false, reason: 'page' };
-      if (page >= 0) n.filled[page][slot] = true;
+      if (page >= 0) {
+        if (gate && !gate(type, clears)) continue;
+        n.filled[page][slot] = true;
+      } else if (laterRoomOf(n, type) > 0) {
+        /* Bộ 3 thuộc trang sau: gửi lên Kệ Đứng nếu còn chỗ; nếu Kệ Đứng đã ĐẦY thì không thể merge (nằm chờ trong khay)! */
+        var canStand = gate ? gate(type, clears) : (creditUsed(n) < (n.pocketCap || 2));
+        if (!canStand) continue;
+        n.credit[type] = (n.credit[type] || 0) + 1;
+      } else if (n.missions.length && n.decoys.indexOf(type) < 0) {
+        return { ok: false, reason: 'page' };
+      }
       var take = 3;
       n.tray = n.tray.filter(function (v) { if (v === type && take) { take--; return false; } return true; });
       n.merges++; clears.push(type);
     }
     n.covers.forEach(function (c) { if (c.holders.every(function (id) { return n.removed[id]; })) n.coverOpened[c.id] = true; });
-    while (n.spread * 2 + 2 < n.missions.length && n.filled.slice(n.spread * 2, n.spread * 2 + 2).every(function (p) { return p.every(Boolean); })) n.spread++;
+    while (n.spread * 2 + 2 < n.missions.length && n.filled.slice(n.spread * 2, n.spread * 2 + 2).every(function (p) { return p.every(Boolean); })) {
+      n.spread++;
+      for (var sp2 = n.spread * 2; sp2 < Math.min(n.missions.length, n.spread * 2 + 2); sp2++) {
+        for (var sk2 = 0; sk2 < n.missions[sp2].length; sk2++) {
+          var st2 = n.missions[sp2][sk2];
+          if (!n.filled[sp2][sk2] && n.credit[st2] > 0) { n.credit[st2]--; n.filled[sp2][sk2] = true; }
+        }
+      }
+      if (!gate) drainReadyTrayTriples(n);
+    }
     return { ok: true, state: revealRules(n), ids: ids, clears: clears };
   }
   function flapBounds(paper, edge, side) {
@@ -944,7 +1036,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     levelConfig: levelConfig, dailyConfig: dailyConfig, pictureConfig: pictureConfig, PICS: PICS, huntTargets: huntTargets, buildLevel: buildLevel, redeal: redeal,
     starLimits: starLimits, starsFor: starsFor, coinReward: coinReward,
     replaySolution: replaySolution, playBot: playBot,
-    createRuleState: createRuleState, ruleAccess: ruleAccess, transition: transition, replayCampaign: replayCampaign,
+    createRuleState: createRuleState, ruleAccess: ruleAccess, transition: transition, recordRuleBurst: recordRuleBurst, replayCampaign: replayCampaign,
     memberCover: memberCover, coverContainsPoint: coverContainsPoint, coverAtPoint: coverAtPoint,
     revealRules: revealRules, flapBounds: flapBounds, flapCoversPoint: flapCoversPoint, nextWitnessAction: nextWitnessAction
   };
@@ -1945,7 +2037,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
   var drag = null, staticDirty = true, peeled = 0, peakReached = 0, triplesDone = 0;
   var combo = 0, lastClear = -99, clock = 0, history = [], usedContinue = false, usedBoosters = 0;
   var goldTaken = 0, comboBonus = 0, dangerOn = false, guide = null, idle = 0, kbSel = -1, ending = false, blockedNotified = {};
-  var heldTypes = {}, rules = null, lesson = null, helperStock = {};
+  var heldTypes = {}, rules = null, lesson = null, helperStock = {}, proBotPlan = null, botActing = false;
   var paperMotion = {}, paperShake = {}, paperHover = -1, holderMasks = {};
   var paperR = null, picCv = null, picKey = '', picWin = 0, maskCv = document.createElement('canvas'), hunt = [];
   var settings = { tapPeel: true, haptics: true, idleHint: true };
@@ -2094,7 +2186,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     shockwaves = []; lightnings = []; vortex = null; screenShake = 0; fever = false;
     cap = Core.BASE_CAP; drag = null; peeled = 0; peakReached = 0; triplesDone = 0; combo = 0; lastClear = -99;
     merges = 0; hold = 0; whirl = null; clock = 0; usedContinue = false; usedBoosters = 0; goldTaken = 0; comboBonus = 0; dangerOn = false; guide = null;
-    idle = 0; kbSel = -1; ending = false; blockedNotified = {}; state = 'play'; picWin = 0; picKey = '';
+    idle = 0; kbSel = -1; ending = false; blockedNotified = {}; state = 'play'; picWin = 0; picKey = ''; proBotPlan = null;
     layout();
     /* Stickers drop onto the sheet from the bottom layer up. */
     stickers.forEach(function (s, i) { s.spawn = reduced ? 1 : -i * 0.016; });
@@ -2213,12 +2305,15 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     dirx /= dl; diry /= dl;
     beginPeel(st, lx * 0.3, ly * 0.3, dirx, diry);
     st.auto = true;
+    st._byBot = !!botActing;
     var p = screenOf(st);
     spawnRing(p.x, p.y, D * k * 0.16, D * k * 0.48, 'rgba(255,255,255,.85)', 3, 0.22);
     Snd.peelTap();
   }
   function detach(st) {
     if (st.state !== 'board') return;
+    if (!st._byBot && !st._twinPulled) proBotPlan = null;
+    st._byBot = false;
     if (rules) {
       var result = preflight(st);
       if (!result.ok) { st.auto = false; st.spring = true; Snd.deny(); emit('scrapbookDeny', result.reason); return; }
@@ -2232,7 +2327,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
       result.ids.forEach(function (id) {
         var s = stickers[id];
         if (s !== st) { beginPeel(s, 0, R * 0.6, 0, -1); s.peel = DETACH; s.F.y = s.A.y - DETACH * 2 * R; }
-        s.state = 'out'; s.peeling = false; s.auto = false; s.arrived = false; s.merge = false;
+        s.state = 'out'; s.peeling = false; s.auto = false; s.arrived = false; s.merge = false; s.preMerged = false; s.mergeBlocked = false;
         peeled++; history.push(id); s.revealed = true;
         if (guide && guide.id === id) guide = null;
         var at = -1;
@@ -2248,7 +2343,9 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
         emit('peel', { id: id, type: s.type });
         lessonEvent('core');
       });
-      result.clears.forEach(function (type) { tray.filter(function (s) { return s.type === type && !s.merge; }).slice(0, 3).forEach(function (s) { s.merge = true; }); });
+      result.clears.forEach(function (type) {
+        tray.filter(function (s) { return s.type === type && !s.merge; }).slice(0, 3).forEach(function (s) { s.merge = true; s.preMerged = true; });
+      });
       Snd.detach(); buzz(10); refresh(); updateDanger(); hud(); staticDirty = true; return;
     }
     if (beltMode()) {
@@ -2552,6 +2649,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
           s.landed = false;
         });
       }
+      proBotPlan = null;
       if (reduced) {
         on.forEach(function (s) { if (s.nextType !== undefined) { s.type = s.nextType; s.nextType = undefined; } });
         staticDirty = true;
@@ -2582,12 +2680,13 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
   function useBooster(name) {
     if (state !== 'play' || !stickers.length) return false;
     var ok = Boosters[name] && Boosters[name]();
-    if (ok) { usedBoosters++; idle = 0; emit('booster', name); }
+    if (ok) { proBotPlan = null; usedBoosters++; idle = 0; emit('booster', name); }
     return !!ok;
   }
   /* Continue after a full tray: two extra slots for this sheet, at the cost of the star rating. */
   function continueWithSlots() {
     if (state !== 'lost') return false;
+    proBotPlan = null;
     usedContinue = true;
     state = 'play';
     ending = false;
@@ -2785,17 +2884,41 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
   }
   function resolveTriples(dt) {
     if (rules) {
-      /* A triple the open spread couldn't take yet keeps checking, so turning the page releases it. */
-      var held = {}, told = false;
-      tray.forEach(function (s) { if (!s.merge && !s.inFlight) held[s.type] = (held[s.type] || 0) + 1; });
-      Object.keys(held).forEach(function (t) {
-        if (held[t] < 3) return;
+      /* A triple the Diorama dock or open spread couldn't take yet keeps checking, and unlocks when the spread turns. */
+      var arrivedByType = {}, told = false;
+      tray.forEach(function (s) {
+        if (s.state === 'tray' && s.arrived && !s.merge && !s.inFlight) (arrivedByType[s.type] = arrivedByType[s.type] || []).push(s);
+      });
+      Object.keys(blockedNotified).forEach(function (bt) {
+        if (!arrivedByType[bt] || arrivedByType[bt].length < 3) delete blockedNotified[bt];
+      });
+      tray.forEach(function (s) {
+        if (!s.merge && (!arrivedByType[s.type] || arrivedByType[s.type].length < 3)) s.mergeBlocked = false;
+      });
+      Object.keys(arrivedByType).forEach(function (t) {
+        var list = arrivedByType[t];
+        if (list.length < 3) return;
         if (!canBurst(+t)) {
-          if (!told) { told = true; if (!resolveTriples.heldAt || clock - resolveTriples.heldAt > 5) { resolveTriples.heldAt = clock; emit('toast', { key: 'waitNextPage' }); } }
+          if (cb.isCreditFull && cb.isCreditFull(+t)) {
+            list.forEach(function (s) {
+              s.merge = false; s.mergeT = 0; s.mergeSide = 0;
+              if (!s.mergeBlocked) { s.mergeBlocked = true; s.shake = 0.95; }
+            });
+            if (!blockedNotified[t]) {
+              blockedNotified[t] = true;
+              var midS = list[1];
+              Snd.deny(); buzz([20, 40, 20]);
+              floats.push({ x: midS.px, y: midS.py - 36, t: 0, text: '🔒 KỆ TRANG SAU ĐẦY!', big: true });
+              emit('mergeBlocked', { type: +t, x: midS.px, y: midS.py });
+            }
+          } else if (!told) {
+            told = true;
+            if (!resolveTriples.heldAt || clock - resolveTriples.heldAt > 5) { resolveTriples.heldAt = clock; emit('toast', { key: 'waitNextPage' }); }
+          }
           return;
         }
-        var got = 0;
-        tray.forEach(function (s) { if (got < 3 && !s.merge && !s.inFlight && s.type === +t) { s.merge = true; s.mergeT = 0; got++; } });
+        list.slice(0, 3).forEach(function (s) { s.merge = true; s.mergeT = s.mergeT || 0; s.mergeBlocked = false; });
+        delete blockedNotified[t];
       });
       var groupsR = {};
       tray.forEach(function (s) { if (s.merge) (groupsR[s.type] = groupsR[s.type] || []).push(s); });
@@ -2815,12 +2938,14 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
             s.px += (midR.px - s.px) * Math.min(1, dt * 22);
           });
           if (g[0].mergeT < 1) break;
+          var wasPreMerged = g.every(function (s) { return !!s.preMerged; });
           g.forEach(function (s) {
             tray.splice(tray.indexOf(s), 1);
             s.state = 'done';
             var hi = history.indexOf(s.id);
             if (hi >= 0) history.splice(hi, 1);
           });
+          if (!wasPreMerged && Core.recordRuleBurst) Core.recordRuleBurst(rules, +t);
           triplesDone++;
           merges++; staticDirty = true; refresh();
           combo = clock - lastClear < 7 ? combo + 1 : 1;
@@ -3521,18 +3646,8 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     ctx.drawImage(sp.shadow, -size / 2, -size / 2, size, size);
     if (s.state === 'fly' && t < 0.5) ctx.drawImage(sp.back, -size / 2, -size / 2, size, size);
     else ctx.drawImage(sp.front, -size / 2, -size / 2, size, size);
-    if (rules && !concealed && s.state === 'tray' && !s.merge && heldTypes[s.type] && !canBurst(s.type)) {
-      ctx.globalAlpha = 0.4;
-      ctx.drawImage(sp.dim, -size / 2, -size / 2, size, size);
-      ctx.globalAlpha = 1;
-      var bw = size * 0.62, bh = size * 0.3;
-      ctx.fillStyle = 'rgba(42,36,56,.92)';
-      ctx.beginPath(); ctx.roundRect(-bw / 2, -bh / 2, bw, bh, bh / 2); ctx.fill();
-      ctx.fillStyle = '#FFD654';
-      ctx.font = '800 ' + Math.round(size * 0.18) + 'px "Baloo 2",system-ui,sans-serif';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText('»»', 0, size * 0.012);
-    } else if (s.mergeBlocked && s.state === 'tray') {
+    /* A complete triple that is merge-blocked shows 🔒 ĐẦY; otherwise while flipping it shows »». */
+    if (s.mergeBlocked && s.state === 'tray') {
       ctx.fillStyle = '#E11D48';
       ctx.beginPath();
       ctx.roundRect(-size * 0.36, size * 0.18, size * 0.72, size * 0.24, 5);
@@ -3545,6 +3660,17 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('🔒 ĐẦY', 0, size * 0.305);
+    } else if (rules && !concealed && s.state === 'tray' && !s.merge && heldTypes[s.type] && !canBurst(s.type)) {
+      ctx.globalAlpha = 0.4;
+      ctx.drawImage(sp.dim, -size / 2, -size / 2, size, size);
+      ctx.globalAlpha = 1;
+      var bw = size * 0.62, bh = size * 0.3;
+      ctx.fillStyle = 'rgba(42,36,56,.92)';
+      ctx.beginPath(); ctx.roundRect(-bw / 2, -bh / 2, bw, bh, bh / 2); ctx.fill();
+      ctx.fillStyle = '#FFD654';
+      ctx.font = '800 ' + Math.round(size * 0.18) + 'px "Baloo 2",system-ui,sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('»»', 0, size * 0.012);
     }
     ctx.restore();
   }
@@ -4007,6 +4133,483 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
   }
   function configure(o) { for (var key in o) settings[key] = o[key]; }
 
+  /* ---------- Smart AI Bot (Pro & Campaign) ---------- */
+  function buildBotSimPro() {
+    var bs = cb.bookState ? cb.bookState() : null;
+    var removed = {}, tMap = {}, tTotal = 0;
+    for (var i = 0; i < stickers.length; i++) if (!onSheet(stickers[i])) removed[i] = true;
+    for (var j = 0; j < tray.length; j++) {
+      if (tray[j].merge) continue;
+      tMap[tray[j].type] = (tMap[tray[j].type] || 0) + 1;
+      tTotal++;
+    }
+    var ow = {}, lw = {}, cr = {};
+    if (bs) {
+      for (var ok in bs.openWant) if (bs.openWant[ok] > 0) ow[ok] = bs.openWant[ok];
+      for (var lk in bs.laterWant) if (bs.laterWant[lk] > 0) lw[lk] = bs.laterWant[lk];
+      for (var ck in bs.credit) if (bs.credit[ck] > 0) cr[ck] = bs.credit[ck];
+    }
+    return {
+      removed: removed, tray: tMap, trayTotal: tTotal, peak: tTotal,
+      peeled: peeled, merges: merges, cleared: stickers.length - Object.keys(removed).length,
+      spread: bs ? bs.shown : 0, spreads: bs ? bs.spreads : 1,
+      openWant: ow, laterWant: lw, credit: cr,
+      pocketUsed: bs ? bs.pocketUsed : 0, pocketMax: bs ? bs.pocketMax : 99,
+      missions: bs ? bs.missions : null, decoys: bs ? bs.decoys : []
+    };
+  }
+  function cloneSimPro(s) {
+    var rem = {}, tr = {}, ow = {}, lw = {}, cr = {};
+    for (var k in s.removed) rem[k] = true;
+    for (var k2 in s.tray) tr[k2] = s.tray[k2];
+    for (var k3 in s.openWant) ow[k3] = s.openWant[k3];
+    for (var k4 in s.laterWant) lw[k4] = s.laterWant[k4];
+    for (var k5 in s.credit) cr[k5] = s.credit[k5];
+    return {
+      removed: rem, tray: tr, trayTotal: s.trayTotal, peak: s.peak,
+      peeled: s.peeled, merges: s.merges, cleared: s.cleared,
+      spread: s.spread, spreads: s.spreads,
+      openWant: ow, laterWant: lw, credit: cr,
+      pocketUsed: s.pocketUsed, pocketMax: s.pocketMax,
+      missions: s.missions, decoys: s.decoys
+    };
+  }
+  function canSimMergePro(sim, type) {
+    if (!sim.missions) return true;
+    if ((sim.openWant[type] || 0) > 0) return true;
+    if ((sim.laterWant[type] || 0) > 0) return sim.pocketUsed < sim.pocketMax;
+    return true;
+  }
+  function flushSimPro(sim) {
+    var progressed = true;
+    while (progressed) {
+      progressed = false;
+      var keys = Object.keys(sim.tray);
+      for (var i = 0; i < keys.length; i++) {
+        var t = +keys[i];
+        while (sim.tray[t] >= 3) {
+          var canOpen = (sim.openWant[t] || 0) > 0;
+          var canLater = !canOpen && (sim.laterWant[t] || 0) > 0;
+          var canShelf = canLater && sim.pocketUsed < sim.pocketMax;
+          if (!canOpen && canLater && !canShelf && sim.missions) break;
+          sim.tray[t] -= 3;
+          if (!sim.tray[t]) delete sim.tray[t];
+          sim.trayTotal -= 3;
+          sim.merges++;
+          progressed = true;
+          if (canOpen) {
+            sim.openWant[t]--;
+            if (!sim.openWant[t]) delete sim.openWant[t];
+          } else if (canShelf) {
+            sim.credit[t] = (sim.credit[t] || 0) + 1;
+            if (sim.laterWant[t] > 0) sim.laterWant[t]--;
+            sim.pocketUsed++;
+          }
+          while (sim.missions && Object.keys(sim.openWant).length === 0 && sim.spread + 1 < sim.spreads) {
+            sim.spread++;
+            for (var side = 0; side < 2; side++) {
+              var pg = sim.missions[sim.spread * 2 + side] || [];
+              for (var k = 0; k < pg.length; k++) {
+                var mt = pg[k];
+                if ((sim.credit[mt] || 0) > 0) {
+                  sim.credit[mt]--;
+                  sim.pocketUsed = Math.max(0, sim.pocketUsed - 1);
+                } else {
+                  sim.openWant[mt] = (sim.openWant[mt] || 0) + 1;
+                  if ((sim.laterWant[mt] || 0) > 0) sim.laterWant[mt]--;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  function isLegalSimPro(sim, st) {
+    if (sim.removed[st.id]) return false;
+    if (st.lock > sim.peeled || (st.tape && st.tape > sim.merges)) return false;
+    for (var i = 0; i < st.blockers.length; i++) if (!sim.removed[st.blockers[i]]) return false;
+    return true;
+  }
+  function applySimPro(sim, st) {
+    sim.removed[st.id] = true;
+    sim.tray[st.type] = (sim.tray[st.type] || 0) + 1;
+    sim.trayTotal++;
+    sim.peeled++;
+    if (st.twin >= 0 && !sim.removed[st.twin]) {
+      var tw = stickers[st.twin];
+      if (tw && (sim.trayTotal <= cap || (sim.tray[tw.type] || 0) >= 2)) {
+        sim.removed[tw.id] = true;
+        sim.tray[tw.type] = (sim.tray[tw.type] || 0) + 1;
+        sim.trayTotal++;
+        sim.peeled++;
+      }
+    }
+    sim.peak = Math.max(sim.peak, sim.trayTotal);
+    flushSimPro(sim);
+  }
+  function scoreProCandidate(sim, st, availByType, nextTapeTarget, revealedMap) {
+    var have = sim.tray[st.type] || 0;
+    var tw = (st.twin >= 0 && !sim.removed[st.twin]) ? stickers[st.twin] : null;
+    var canM = canSimMergePro(sim, st.type);
+    var openRem = 0;
+    for (var ok in sim.openWant) openRem += sim.openWant[ok];
+
+    var willMerge = (have >= 2 && canM) || (tw && tw.type === st.type && have >= 1 && canM);
+    var delta = tw ? 2 : 1;
+    if (have >= 2 && canM) delta -= 3;
+    if (tw) {
+      if (tw.type === st.type && have === 1 && canM) delta = -1;
+      else if ((sim.tray[tw.type] || 0) >= 2 && canSimMergePro(sim, tw.type)) delta -= 3;
+    }
+    var newTotal = sim.trayTotal + delta;
+    var freeAfter = cap - newTotal;
+    if (freeAfter <= 0) return -1e9;
+
+    var sc = 0;
+    if (willMerge) {
+      sc += 5600;
+      if ((sim.openWant[st.type] || 0) > 0) sc += openRem <= 1 ? 7500 : 4600;
+      else if ((sim.laterWant[st.type] || 0) > 0) sc += 1100 + (sim.trayTotal >= 4 ? 1900 : 0) - (sim.pocketMax - sim.pocketUsed <= 1 ? 450 : 0);
+      else sc += 1900;
+      if (nextTapeTarget && sim.merges + 1 >= nextTapeTarget) sc += 1600;
+    } else {
+      var wantOpen = (sim.openWant[st.type] || 0) > 0;
+      var exposed = availByType[st.type] || 0;
+      if (have >= 2 && !canM) sc -= 5600;
+      else if (have === 1) {
+        if (!canM) sc -= 2600;
+        else if (exposed >= 2) sc += 2500 + (wantOpen ? 1600 : 0);
+        else sc += 800 + (wantOpen ? 600 : 0);
+      } else {
+        if (!canM) sc -= 1800;
+        else if (wantOpen) sc += (exposed >= 3 ? 1200 : exposed === 2 ? 420 : 40);
+        else sc -= 150;
+      }
+      if (freeAfter === 1) sc -= 7500;
+      else if (freeAfter === 2) sc -= 1600;
+      else if (freeAfter === 3) sc -= 350;
+    }
+    if (tw && !(tw.type === st.type && have === 1 && canM)) {
+      var twHave = sim.tray[tw.type] || 0;
+      if (twHave >= 2 && canSimMergePro(sim, tw.type)) sc += 3200;
+      else if ((sim.openWant[tw.type] || 0) > 0) sc += 400;
+      else sc -= 450;
+    }
+    /* Prefer peeling tiles that unlock buried stickers helpful for the tray or current spread. */
+    for (var bi = 0; bi < st.blocks.length; bi++) {
+      var b = stickers[st.blocks[bi]];
+      if (!b || sim.removed[b.id]) continue;
+      var otherBlocked = false;
+      for (var kj = 0; kj < b.blockers.length; kj++) {
+        var blkId = b.blockers[kj];
+        if (blkId !== st.id && !sim.removed[blkId]) { otherBlocked = true; break; }
+      }
+      if (!otherBlocked) {
+        var known = !b.mystery || b.revealed || (revealedMap && revealedMap[b.id]);
+        if (!known) sc += 220;
+        else {
+          var bt = b.type;
+          sc += 240;
+          if ((sim.tray[bt] || 0) >= 1 && canSimMergePro(sim, bt)) sc += 850;
+          if ((sim.openWant[bt] || 0) > 0) sc += 460;
+        }
+      }
+    }
+    return sc;
+  }
+  function beamProSearch(rootSim) {
+    var total = stickers.length, BEAM_W = 34, BRANCH_B = 8;
+    var beam = [{ sim: rootSim, path: [], sc: 0 }];
+    var bestSurvive = beam[0];
+    for (var depth = 0; depth < total; depth++) {
+      var nextBeam = [], seenSig = {};
+      for (var bi = 0; bi < beam.length; bi++) {
+        var node = beam[bi], sim = node.sim;
+        var avail = [], availByT = {}, minTape = 0;
+        for (var k = 0; k < total; k++) {
+          var st = stickers[k];
+          if (sim.removed[st.id]) continue;
+          if (st.tape && st.tape > sim.merges && (!minTape || st.tape < minTape)) minTape = st.tape;
+          if (isLegalSimPro(sim, st)) {
+            avail.push(st);
+            availByT[st.type] = (availByT[st.type] || 0) + 1;
+          }
+        }
+        if (!avail.length) continue;
+        var scored = [];
+        for (var a = 0; a < avail.length; a++) {
+          var mv = avail[a];
+          scored.push({ st: mv, sc: scoreProCandidate(sim, mv, availByT, minTape, sim.removed) });
+        }
+        scored.sort(function (x, y) { return y.sc - x.sc; });
+        var branchTaken = 0, usedLeaf = {};
+        for (var m = 0; m < scored.length && branchTaken < BRANCH_B; m++) {
+          if (scored[m].sc <= -5e8) break;
+          var stMove = scored[m].st;
+          if (stMove.blocks.length === 0 && stMove.twin < 0) {
+            if (usedLeaf[stMove.type]) continue;
+            usedLeaf[stMove.type] = true;
+          }
+          branchTaken++;
+          var cs = cloneSimPro(sim);
+          applySimPro(cs, stMove);
+          if (cs.trayTotal >= cap) continue;
+          var remCount = 0, trayParts = [];
+          for (var r = 0; r < total; r++) if (!cs.removed[r]) remCount++;
+          var newPath = node.path.concat([stMove.id]);
+          if (remCount === 0) return { win: true, path: newPath };
+          var tKeys = Object.keys(cs.tray).sort();
+          for (var tk = 0; tk < tKeys.length; tk++) trayParts.push(tKeys[tk] + ':' + cs.tray[tKeys[tk]]);
+          var stateSig = trayParts.join(',') + '|' + cs.spread + '|' + cs.pocketUsed + '|' + remCount + '|' + cs.merges;
+          var fScore = (total - remCount) * 850 + cs.merges * 3400 + cs.spread * 28000 - cs.peak * 1400 - cs.trayTotal * 260 + scored[m].sc * 0.05;
+          if (seenSig[stateSig] !== undefined && seenSig[stateSig] >= fScore) continue;
+          seenSig[stateSig] = fScore;
+          nextBeam.push({ sim: cs, path: newPath, sc: fScore, rem: remCount });
+        }
+      }
+      if (!nextBeam.length) break;
+      nextBeam.sort(function (x, y) { return y.sc - x.sc; });
+      if (nextBeam.length > BEAM_W) nextBeam.length = BEAM_W;
+      beam = nextBeam;
+      bestSurvive = beam[0];
+    }
+    return { win: false, path: bestSurvive ? bestSurvive.path : null };
+  }
+  function chooseProStep() {
+    if (proBotPlan && proBotPlan.length) {
+      var pid = proBotPlan[0], pst = stickers[pid];
+      if (pst && pst.state === 'board' && !pst.peeling && !pst.blocked && !pst.locked && canAdd(pst)) {
+        proBotPlan.shift();
+        botActing = true;
+        autoPeel(pst, R * 0.6, R * 0.6);
+        botActing = false;
+        return pst.id;
+      }
+      proBotPlan = null;
+    }
+    var avail = [], availByT = {}, minTape = 0;
+    for (var i = 0; i < stickers.length; i++) {
+      var st = stickers[i];
+      if (st.state !== 'board' || st.peeling) continue;
+      if (st.tape && st.tape > merges && (!minTape || st.tape < minTape)) minTape = st.tape;
+      if (!st.blocked && !st.locked) {
+        avail.push(st);
+        availByT[st.type] = (availByT[st.type] || 0) + 1;
+      }
+    }
+    if (!avail.length) return stickers.some(function (s) { return s.state === 'out' || s.state === 'fly' || s.peeling; }) ? 'wait' : null;
+    var rootSim = buildBotSimPro();
+    var res = beamProSearch(rootSim), plan = res && res.path;
+    var pickId = (plan && plan.length) ? plan[0] : null;
+    if (pickId === null) {
+      var ranked = avail.map(function (st) {
+        return { st: st, sc: scoreProCandidate(rootSim, st, availByT, minTape, {}) };
+      }).sort(function (a, b) { return b.sc - a.sc; });
+      pickId = ranked[0].st.id;
+    } else if (res.win && plan.length > 1) {
+      proBotPlan = plan.slice(1);
+    }
+    var chosen = stickers[pickId];
+    if (!chosen || !canAdd(chosen)) return 'wait';
+    botActing = true;
+    autoPeel(chosen, R * 0.6, R * 0.6);
+    botActing = false;
+    return chosen.id;
+  }
+
+  /* Smart Campaign Bot: uses live Core.transition + lookahead across flaps, papers, keys, glues, duos, and Standing Shelf cap. */
+  function fastRuleEligible(s, t) {
+    if (s.removed[t.id]) return false;
+    if (t.lock > s.peeled || (t.tape && t.tape > s.merges)) return false;
+    if (t.flap != null && t.flap === s.flap) return false;
+    if (t.group && !s.opened[t.group]) return false;
+    for (var i = 0; i < t.blockers.length; i++) if (!s.removed[t.blockers[i]]) return false;
+    return true;
+  }
+  function countOpenMissionSlots(s) {
+    var open = {};
+    if (!s.missions) return open;
+    for (var side = 0; side < 2; side++) {
+      var pg = s.spread * 2 + side;
+      var list = s.missions[pg] || [], fl = s.filled[pg] || [];
+      for (var k = 0; k < list.length; k++) if (!fl[k]) open[list[k]] = (open[list[k]] || 0) + 1;
+    }
+    return open;
+  }
+  function countRemainingHolders(s) {
+    var total = 0;
+    for (var i = 0; i < (s.covers || []).length; i++) {
+      var c = s.covers[i];
+      if (!s.coverOpened[c.id]) {
+        for (var h = 0; h < c.holders.length; h++) if (!s.removed[c.holders[h]]) total++;
+      }
+    }
+    return total;
+  }
+  function scoreCampaignMove(s, act, r) {
+    var ns = r.state, freeAfter = s.cap - ns.tray.length;
+    if (freeAfter <= 0) return -1e9;
+    var sc = 0;
+    var coversBefore = Object.keys(s.coverOpened).length, coversAfter = Object.keys(ns.coverOpened).length;
+    var keysBefore = Object.keys(s.opened).length, keysAfter = Object.keys(ns.opened).length;
+    if (ns.spread > s.spread) sc += 7000;
+    if (r.clears.length > 0) {
+      var openMap = countOpenMissionSlots(s);
+      sc += 5500;
+      for (var ci = 0; ci < r.clears.length; ci++) sc += (openMap[r.clears[ci]] || 0) > 0 ? 3200 : 1000;
+    }
+    if (coversAfter > coversBefore) sc += 3400 * (coversAfter - coversBefore);
+    if (keysAfter > keysBefore) sc += 3600 * (keysAfter - keysBefore);
+    var holdDiff = countRemainingHolders(s) - countRemainingHolders(ns);
+    if (holdDiff > 0) sc += 750 * holdDiff;
+
+    if (act.type === 'peel') {
+      var tl = s.tiles[act.id], have = 0;
+      for (var ti = 0; ti < s.tray.length; ti++) if (s.tray[ti] === tl.type) have++;
+      var openNow = countOpenMissionSlots(s);
+      if (r.clears.length === 0) {
+        if (have >= 2) sc -= 4800; // Triple blocked in tray because Standing Shelf is full!
+        else if (have === 1) sc += (openNow[tl.type] || 0) > 0 ? 2200 : 900;
+        else sc += (openNow[tl.type] || 0) > 0 ? 320 : -120;
+      }
+      if (tl.duo != null && s.tiles[tl.duo] && !s.removed[tl.duo]) {
+        var mateT = s.tiles[tl.duo].type, mateHave = 0;
+        for (var mj = 0; mj < s.tray.length; mj++) if (s.tray[mj] === mateT) mateHave++;
+        if (mateHave >= 2) sc += 2000;
+      }
+      if (freeAfter === 1 && !r.clears.length) sc -= 6500;
+      else if (freeAfter === 2 && !r.clears.length) sc -= 1400;
+      for (var bi = 0; bi < tl.blocks.length; bi++) {
+        var bt = s.tiles[tl.blocks[bi]];
+        if (!bt || ns.removed[bt.id]) continue;
+        if (!bt.mystery || ns.revealed[bt.id]) sc += (openNow[bt.type] || 0) > 0 ? 360 : 180;
+        else sc += 160;
+      }
+    }
+    return sc;
+  }
+  function bestCurSc(cands) {
+    var b = -1e12;
+    for (var i = 0; i < cands.length; i++) if (cands[i].sc > b) b = cands[i].sc;
+    return b;
+  }
+  function rolloutCampaign(startState, maxSteps) {
+    var s = startState, peak = s.tray.length, lastToggle = false;
+    for (var step = 0; step < maxSteps; step++) {
+      var seenSig = {}, cands = [];
+      for (var i = 0; i < s.tiles.length; i++) {
+        var t = s.tiles[i];
+        if (!fastRuleEligible(s, t)) continue;
+        var sig = t.type + '_' + (t.key || '') + '_' + (t.duo != null ? 1 : 0) + '_' + (t.blocks.length ? 1 : 0);
+        if (seenSig[sig]) continue;
+        var act = { type: 'peel', id: t.id };
+        var r = Core.transition(s, act);
+        if (!r.ok) continue;
+        seenSig[sig] = true;
+        cands.push({ act: act, r: r, sc: scoreCampaignMove(s, act, r) });
+      }
+      if (level.cfg.scrapbook && level.cfg.scrapbook.flap && !lastToggle && (!cands.length || bestCurSc(cands) < 400)) {
+        var tr = Core.transition(s, { type: 'toggle' });
+        if (tr.ok) {
+          var altBest = -1e12, ts = tr.state;
+          for (var j = 0; j < ts.tiles.length; j++) {
+            var tt = ts.tiles[j];
+            if (!fastRuleEligible(ts, tt)) continue;
+            var ar = Core.transition(ts, { type: 'peel', id: tt.id });
+            if (ar.ok) altBest = Math.max(altBest, scoreCampaignMove(ts, { type: 'peel', id: tt.id }, ar));
+          }
+          if (!cands.length || altBest > bestCurSc(cands) + 350) {
+            s = tr.state; lastToggle = true; continue;
+          }
+        }
+      }
+      if (!cands.length) break;
+      lastToggle = false;
+      cands.sort(function (a, b) { return b.sc - a.sc; });
+      var pick = cands[0];
+      if (pick.sc <= -5e8) break;
+      s = pick.r.state;
+      peak = Math.max(peak, s.tray.length);
+      if (s.tray.length >= s.cap) break;
+    }
+    var removedCount = 0;
+    for (var k = 0; k < s.removed.length; k++) if (s.removed[k]) removedCount++;
+    return {
+      win: removedCount === s.tiles.length && s.tray.length === 0,
+      removed: removedCount, spread: s.spread, merges: s.merges, peak: peak,
+      alive: s.tray.length < s.cap
+    };
+  }
+  function chooseCampaignStep() {
+    if (scrapbookBusy()) return 'wait';
+    var snap = ruleSnapshot();
+    var leftOnSheet = 0;
+    for (var i = 0; i < stickers.length; i++) if (stickers[i].state === 'board' && !stickers[i].peeling) leftOnSheet++;
+    if (!leftOnSheet) return null;
+
+    var liveGate = function (type, clears) { return !cb.canClearCount ? canBurst(type) : cb.canClearCount(type, clears); };
+    var allLegal = [], seenSig = {}, candidates = [];
+    for (var j = 0; j < stickers.length; j++) {
+      var st = stickers[j];
+      if (st.state !== 'board' || st.peeling) continue;
+      var tSpec = snap.tiles[st.id];
+      if (!fastRuleEligible(snap, tSpec)) continue;
+      var act = { type: 'peel', id: st.id };
+      var res = Core.transition(snap, act, liveGate);
+      if (!res.ok) continue;
+      var sc = scoreCampaignMove(snap, act, res);
+      allLegal.push({ act: act, r: res, sc: sc });
+    }
+    allLegal.sort(function (a, b) { return b.sc - a.sc; });
+    for (var k = 0; k < allLegal.length && candidates.length < 5; k++) {
+      var cand = allLegal[k], tl = snap.tiles[cand.act.id];
+      var sig = tl.type + '_' + (tl.key || '') + '_' + (tl.duo != null ? 1 : 0);
+      if (seenSig[sig]) continue;
+      seenSig[sig] = true;
+      candidates.push(cand);
+    }
+    /* Include valid witness action cleanly in evaluation pool if legally playable now. */
+    var wAct = Core.nextWitnessAction(level, snap);
+    if (wAct && wAct.type === 'peel' && stickers[wAct.id].state === 'board' && !stickers[wAct.id].peeling) {
+      var wRes = Core.transition(snap, wAct, liveGate);
+      if (wRes.ok && !candidates.some(function (c) { return c.act.id === wAct.id; })) {
+        candidates.push({ act: wAct, r: wRes, sc: scoreCampaignMove(snap, wAct, wRes) + 50, witness: true });
+      }
+    }
+    /* Check whether toggling the two-sided flap reveals clearly stronger moves or is needed when stuck. */
+    if (level.cfg.scrapbook && level.cfg.scrapbook.flap) {
+      var togRes = Core.transition(snap, { type: 'toggle' });
+      if (togRes.ok) {
+        var bestAltSc = -1e12, ts = togRes.state;
+        for (var m = 0; m < ts.tiles.length; m++) {
+          if (!fastRuleEligible(ts, ts.tiles[m])) continue;
+          var aRes = Core.transition(ts, { type: 'peel', id: ts.tiles[m].id });
+          if (aRes.ok) bestAltSc = Math.max(bestAltSc, scoreCampaignMove(ts, { type: 'peel', id: ts.tiles[m].id }, aRes));
+        }
+        var curTop = allLegal.length ? allLegal[0].sc : -1e12;
+        if (!allLegal.length || (wAct && wAct.type === 'toggle') || bestAltSc > curTop + 450) {
+          candidates.push({ act: { type: 'toggle' }, r: togRes, sc: bestAltSc - 80 });
+        }
+      }
+    }
+    if (!candidates.length) return null;
+
+    var bestPick = candidates[0], bestRank = -1e15, horizon = snap.tiles.length + 12;
+    for (var q = 0; q < candidates.length; q++) {
+      var item = candidates[q];
+      var ro = rolloutCampaign(item.r.state, horizon);
+      var rank = (ro.win ? 1e9 : ro.alive ? ro.removed * 1e4 + ro.spread * 2e5 : -1e8) - ro.peak * 2000 + item.sc * 0.01;
+      if (rank > bestRank) { bestRank = rank; bestPick = item; }
+      if (ro.win && ro.peak <= snap.cap - 2 && item.sc >= 0 && q === 0) break;
+    }
+    if (bestPick.act.type === 'toggle') return toggleFlap() ? 'toggle' : 'wait';
+    var pickedTile = stickers[bestPick.act.id];
+    if (!pickedTile || !canAdd(pickedTile)) return 'wait';
+    autoPeel(pickedTile, R * 0.6, R * 0.6);
+    return pickedTile.id;
+  }
+
   PO.Game = {
     bind: bind, start: start, stop: stop, setPaused: setPaused, useBooster: useBooster, configure: configure,
     continueWithSlots: continueWithSlots, canUndo: canUndo,
@@ -4093,11 +4696,12 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
         extra.forEach(function (s) { s.type = targetType; spriteOf(targetType); picks.push(s); });
       }
       if (picks.length < need) return false;
-      var canM = !cb.canMerge || cb.canMerge(targetType);
+      var canM = rules ? canBurst(targetType) : (!cb.canMerge || cb.canMerge(targetType));
       var coreX = W / 2, coreY = trayY + slot / 2 + 8;
       delete blockedNotified[targetType];
       picks.forEach(function (s, i) {
         s.tape = false; s.lock = 0; s.revealed = true; s.twin = -1; s.A = null; s.F = null;
+        if (rules) { rules.removed[s.id] = true; s.revealed = true; }
         var p = screenOf(s);
         addLightning(coreX, coreY, p.x, p.y, canM ? '#FFD531' : '#FF5A6E', 0.42);
         shockwaves.push({ x: p.x, y: p.y, r0: 6, r1: D * k * 0.85, t: 0, dur: 0.38, c: canM ? '#FFD531' : '#FF5A6E', w: 4.5 });
@@ -4109,41 +4713,25 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
         if (at >= 0) tray.splice(at + 1, 0, s); else tray.push(s);
         s.arrived = false;
         s.merge = canM;
+        s.preMerged = !!(rules && canM);
         s.mergeBlocked = false;
         startFly(s, p.x, p.y);
         s.flyT = -i * 0.05;
       });
-      if (canM) tray.forEach(function (s) { if (s.type === targetType) s.merge = true; });
+      if (rules) {
+        Core.revealRules(rules);
+        if (canM && Core.recordRuleBurst) Core.recordRuleBurst(rules, targetType);
+      }
+      if (canM) tray.forEach(function (s) { if (s.type === targetType) { s.merge = true; if (rules) s.preMerged = true; } });
       screenShake = 0.6;
       Snd.magic ? Snd.magic() : Snd.power();
       refresh(); updateDanger(); hud();
       return true;
     },
-    /* Test hook: peel the next sticker from the level's proof order. */
+    /* Smart AI Bot: solves both Pro Mode and 50-level Campaign Mode legally with live lookahead, zero cheating. */
     debugStep: function () {
       if (state !== 'play') return state;
-      if (rules) {
-        if (scrapbookBusy()) return 'wait';
-        var action = Core.nextWitnessAction(level, ruleSnapshot());
-        if (!action) return null;
-        if (action.type === 'toggle') return toggleFlap() ? 'toggle' : 'wait';
-        var tile = stickers[action.id];
-        if (tile.state !== 'board') return 'wait';
-        if (!canAdd(tile)) return 'wait';
-        autoPeel(tile, R * 0.6, R * 0.6); return tile.id;
-      }
-      var sol = level.solution;
-      for (var i = 0; i < sol.length; i++) {
-        var s = stickers[sol[i]];
-        if (s.state === 'board' && !s.peeling) {
-          s.tape = false;
-          if (s.locked) s.lock = 0;
-          refresh();
-          autoPeel(s, R * 0.6, R * 0.6);
-          return s.id;
-        }
-      }
-      return null;
+      return rules ? chooseCampaignStep() : chooseProStep();
     },
     debugState: function () {
       return {
@@ -4247,7 +4835,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     { tier: 'teach', pocketCap: 2, missions: [2, 2, 3, 3], kinds: 2, pool: 4, peak: 4, spread: 0.3, bottom: 0.7, decoys: 0, album: 1, chapter: 'beach', unlocks: [61, 64], sketch: SKETCH, mods: { tape: 0.14, gold: 4, twin: 2 }, salt: 1 },
     { tier: 'practice', pocketCap: 3, missions: [3, 3, 3, 3], kinds: 2, pool: 5, peak: 5, spread: 0.4, bottom: 0.55, decoys: 0, album: 2, chapter: 'beach', unlocks: [63, 65], sketch: SKETCH, mods: { mystery: 0.18, tape: 0.15, gold: 4, twin: 2 }, salt: 10 },
     { tier: 'practice', pocketCap: 3, missions: [4, 4, 4, 4], kinds: 3, pool: 6, peak: 5, spread: 0.5, bottom: 0.45, decoys: 1, album: 3, chapter: 'beach', unlocks: [66, 67], sketch: SKETCH, mods: { mystery: 0.2, tape: 0.18, gold: 5, twin: 2, lock: 2 }, salt: 5 },
-    { tier: 'hard', pocketCap: 2, missions: [5, 5, 5, 5], kinds: 3, pool: 7, peak: 6, spread: 0.7, bottom: 0.35, decoys: 1, album: 4, chapter: 'beach', unlocks: [68, 69], sketch: SKETCH, mods: { mystery: 0.22, tape: 0.2, gold: 6, twin: 3, lock: 3 }, salt: 21 }
+    { tier: 'hard', pocketCap: 2, missions: [5, 5, 5, 5], kinds: 3, pool: 7, peak: 6, spread: 0.7, bottom: 0.35, decoys: 1, album: 4, chapter: 'beach', unlocks: [68, 69], sketch: SKETCH, mods: { mystery: 0.22, tape: 0.2, gold: 6, twin: 3, lock: 3 }, salt: 3 }
   ];
   /* A chapter gives each page its own picture (imgL, imgR; fullL / fullR: the original illustration a full page
      fades into). A slot is [sticker id, x, y, size]: x and y are 0..1 of its page, size a share of the book's
@@ -4282,11 +4870,15 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
         right: [[60, 0.25, 0.57, 0.62], [61, 0.77, 0.57, 0.62], [69, 0.51, 0.82, 0.24], [63, 0.21, 0.93, 0.14], [63, 0.82, 0.93, 0.14]] }
     ] }
   };
-  var CAMPAIGN_LEVELS = (PO.ScrapbookCampaign || []).map(function (record) {
+  var CAMPAIGN_LEVELS = (PO.ScrapbookCampaign || []).map(function (record, idx) {
     var copy = Object.assign({}, record);
     var s = CAMPAIGN_STORIES[copy.story];
     if (s) { copy.album = s.album; copy.scenes = s.scenes; }
     copy.hard = copy.tier === 'hard';
+    /* Giới hạn chỗ đứng sticker trang sau trên Kệ Diorama: 2 chỗ ở màn đầu / màn KHÓ, 3 chỗ ở màn thường rộng hơn. */
+    if (copy.pocketCap == null) {
+      copy.pocketCap = (copy.hard || idx < 10) ? 2 : 3;
+    }
     return copy;
   });
 
@@ -4321,6 +4913,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
       n: srcIdx + 1, seed: 4241 + srcIdx * 7919 + (p.salt || 0) * 31, album: p.album, mixed: true, quilt: true, trayTop: true,
       triples: targets.length + decoys.length, pool: targets.concat(decoys), peak: p.peak, spread: p.spread,
       bottom: bottom, shape: SHAPES[srcIdx % SHAPES.length], mods: p.mods, tier: p.hard ? 'hard' : 'normal',
+      pocketCap: p.pocketCap || 2,
       scrapbook: p.scrapbook, missions: missions, decoys: decoys, intro: p.intro, role: p.role, decision: p.decision
     };
     return { def: p, cfg: cfg, missions: missions, targets: targets, decoys: decoys };
@@ -4402,14 +4995,15 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
 
   /* ---------- save ---------- */
   var KEY = 'so-sticker-v6';   // v6: tile match rules; preserves both Pro Mode and Scrapbook Campaign saves
-  var save = { unlocked: 1, stars: [], campUnlocked: 1, campStars: [], mode: 'pro', collected: {}, seen: {} };
+  var save = { unlocked: 1, stars: [], campUnlocked: 1, campStars: [], mode: 'campaign', collected: {}, seen: {} };
   try { var raw = localStorage.getItem(KEY); if (raw) save = Object.assign(save, JSON.parse(raw)); } catch (e) { /* plays without saving */ }
   if (!save.collected) save.collected = {};
   if (!save.campStars) save.campStars = [];
   if (!save.seen) save.seen = {};
-  if (!save.mode) save.mode = 'pro';
+  if (!save.mode || !save.defaultDioramaFirst) { save.mode = 'campaign'; save.defaultDioramaFirst = true; }
   var activeMode = save.mode;
   function persist() { try { localStorage.setItem(KEY, JSON.stringify(save)); } catch (e) { /* plays without saving */ } }
+  if (raw === null || save.defaultDioramaFirst) persist();
   function isScrapbook() { return !!(lv && lv.def && lv.def.scrapbook); }
   function isStickerCollected(id) {
     if (save.collected && save.collected[id]) return true;
@@ -4491,6 +5085,18 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     return pocketStack.length + inFlight;
   }
   function isPocketFull() { return pocketCount() >= pocketMax(); }
+  function dioramaShelfGeom(w, h, maxCap) {
+    maxCap = maxCap || 2;
+    var midX = (PAGE_RECT[0][0] + PAGE_RECT[1][1]) * 0.5 * w;
+    var step = h * 0.118, sw = h * 0.055 + maxCap * step + h * 0.04, sh = h * 0.195;
+    var sx = midX - sw * 0.5, sy = h * 0.992 - sh;
+    var plankY = sy + sh - h * 0.068;
+    var slots = [];
+    for (var i = 0; i < maxCap; i++) {
+      slots.push({ x: sx + h * 0.048 + (i + 0.5) * step, y: plankY - h * 0.042, r: step * 0.44 });
+    }
+    return { x: sx, y: sy, w: sw, h: sh, plankY: plankY, step: step, slots: slots };
+  }
   var bookW = 300, bookH = 180, glowTypes = {};
   var dragModeActive = false, waxSheet = [], dragItem = null, selectedWax = null;
   var botActive = false, botTimer = 0;
@@ -4500,7 +5106,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
   var PAGES_X = [{ x0: 0.07, x1: 0.47 }, { x0: 0.53, x1: 0.93 }], PAGE_Y0 = 0.2, PAGE_Y1 = 0.9;
   /* A chapter with a picture per page (imgL, imgR): each picture covers its page, slots in 0..1 of that page. */
   var PAGE_RECT = [[0.045, 0.495], [0.505, 0.955]], PAGE_TOP = 0.07, PAGE_H = 0.87;
-  var D_TOP = 0.045, D_H = 0.835;
+  var D_TOP = 0.045, D_H = 0.822;
   function pageFrame(side, w, h) {
     var pg = PAGE_RECT[side], pw = (pg[1] - pg[0]) * w, ph = D_H * h, size = Math.min(pw, ph);
     return { x: pg[0] * w + (pw - size) / 2, y: D_TOP * h + (ph - size) / 2, size: size };
@@ -4569,10 +5175,10 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     [left, right].forEach(function (list, side) {
       list.forEach(function (sl, k) {
         if (got[s * 2 + side] && got[s * 2 + side][k]) {
-          if (isScrapbook() || s === 0 || reduced) {
+          if (s === 0 || reduced) {
             sl.filledAt = 0;
           } else {
-            /* Reserve the slot during the page turn so the sticker can burst out of the Bookmark Pocket right after! */
+            /* Reserve the slot during the turn/slide so the standing sticker can leap off the shelf into its scene! */
             sl.reserved = true;
             pendingUnpack.push(sl);
           }
@@ -4809,6 +5415,107 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     }
     x.beginPath(); x.roundRect(px, py, pw, ph, h * 0.04); x.clip();
     x.drawImage(pic, px + (pw - dw) / 2, py + (ph - dh) / 2, dw, dh);
+    x.restore();
+  }
+  /* Khay kệ gỗ gài sticker trang sau (Diorama Standing Tray) tích hợp trực tiếp trên viền dưới của khung hộp Diorama. */
+  function drawDioramaShelf(x, w, h, now) {
+    var maxCap = pocketMax(), g = dioramaShelfGeom(w, h, maxCap);
+    var curCount = Math.min(maxCap, pocketCount()), full = curCount >= maxCap;
+    var pulse = pocketPulse > 0 ? 1 + Math.sin(pocketPulse * Math.PI) * 0.11 : 1;
+    var shX = pocketShake > 0 && !reduced ? Math.sin(pocketShake * 38) * 4 * pocketShake : 0;
+    var cxMid = g.x + g.w / 2, cyMid = g.plankY + h * 0.02;
+
+    x.save();
+    x.translate(cxMid + shX, cyMid);
+    x.scale(pulse, pulse);
+    x.translate(-cxMid, -cyMid);
+
+    var trayX = g.x + h * 0.008, trayW = g.w - h * 0.016;
+    var trayY = g.plankY - h * 0.016, trayH = h * 0.062;
+
+    /* Hào quang nhẹ quanh thanh khay gỗ (chỉ khi có sticker hoặc đầy) */
+    if (curCount > 0 || full) {
+      var glowA = 0.28 + 0.18 * Math.sin(now * (full ? 11 : 5));
+      var hg = x.createRadialGradient(cxMid, g.plankY, trayH * 0.3, cxMid, g.plankY, g.w * 0.62);
+      hg.addColorStop(0, full ? 'rgba(225,29,72,' + glowA + ')' : 'rgba(255,213,49,' + glowA + ')');
+      hg.addColorStop(1, 'rgba(255,213,49,0)');
+      x.fillStyle = hg;
+      x.beginPath(); x.ellipse(cxMid, g.plankY, g.w * 0.62, h * 0.085, 0, 0, TAU); x.fill();
+    }
+
+    /* Thanh khay gỗ nổi gắn liền trên viền khung hộp (không khung trắng bao quanh) */
+    x.shadowColor = 'rgba(28,16,8,0.34)'; x.shadowBlur = h * 0.022; x.shadowOffsetY = h * 0.01;
+    x.beginPath(); x.roundRect(trayX, trayY, trayW, trayH, h * 0.024);
+    var trayG = x.createLinearGradient(0, trayY, 0, trayY + trayH);
+    trayG.addColorStop(0, full ? '#FB7185' : '#DDA05E');
+    trayG.addColorStop(0.45, full ? '#E11D48' : '#BC7B3E');
+    trayG.addColorStop(1, full ? '#9F1239' : '#7E4A21');
+    x.fillStyle = trayG;
+    x.fill();
+    x.shadowColor = 'transparent';
+    x.lineWidth = Math.max(1.1, h * 0.007);
+    x.strokeStyle = full ? '#FFE4E6' : '#5E3415';
+    x.stroke();
+
+    /* Đường gờ sáng mép trên khay gỗ */
+    x.fillStyle = full ? 'rgba(255,228,230,0.45)' : 'rgba(255,246,214,0.5)';
+    x.fillRect(trayX + h * 0.02, trayY + Math.max(1, h * 0.006), trayW - h * 0.04, Math.max(1, h * 0.006));
+
+    /* Từng ô khe gài + sticker đứng dán thẳng vào khay */
+    for (var i = 0; i < maxCap; i++) {
+      var sl = g.slots[i], item = pocketStack[i];
+      /* Khe rãnh khoét sâu trên mặt khay gỗ */
+      x.beginPath(); x.ellipse(sl.x, g.plankY + h * 0.012, sl.r * 0.62, h * 0.015, 0, 0, TAU);
+      x.fillStyle = full ? 'rgba(110,12,34,0.55)' : 'rgba(54,28,10,0.52)';
+      x.fill();
+
+      if (item) {
+        var sp = stickerSprite(item.type);
+        var age = item.addedAt ? Math.max(0, now - item.addedAt) : 1;
+        var popSc = age < 0.35 && !reduced ? backOut(Math.min(1, age / 0.35)) : 1;
+        var sway = !reduced ? Math.sin(now * 3.4 + i * 1.5) * 0.045 : 0;
+        var bob = !reduced ? Math.sin(now * 4.2 + i * 1.5) * h * 0.005 : 0;
+        var stBox = (sl.r * 2.2) / Art.ART;
+        x.save();
+        x.translate(sl.x, sl.y + bob);
+        x.rotate(sway);
+        x.scale(popSc, popSc);
+        x.drawImage(sp.shadow, -stBox / 2, -stBox / 2 + h * 0.008, stBox, stBox);
+        x.drawImage(sp.front, -stBox / 2, -stBox / 2, stBox, stBox);
+        x.restore();
+      } else {
+        /* Ô trống trong suốt có vòng nét đứt mảnh nổi trực tiếp trên mép khay */
+        x.save();
+        x.beginPath(); x.arc(sl.x, sl.y + h * 0.008, sl.r * 0.48, 0, TAU);
+        x.fillStyle = full ? 'rgba(190,18,60,0.22)' : 'rgba(62,36,14,0.24)';
+        x.fill();
+        x.setLineDash([Math.max(2, h * 0.01), Math.max(2, h * 0.008)]);
+        x.lineWidth = Math.max(1, h * 0.005);
+        x.strokeStyle = full ? 'rgba(255,228,230,0.75)' : 'rgba(255,248,225,0.72)';
+        x.stroke();
+        x.setLineDash([]);
+        x.fillStyle = 'rgba(255,250,232,0.92)';
+        x.font = '800 ' + Math.round(h * 0.04) + 'px "Baloo 2",system-ui,sans-serif';
+        x.textAlign = 'center'; x.textBaseline = 'middle';
+        x.fillText('+', sl.x, sl.y + h * 0.01);
+        x.restore();
+      }
+    }
+
+    /* Nhãn sức chứa gọn ở mép dưới thanh khay gỗ */
+    var pillTxt = full ? ('🔒 ĐẦY ' + curCount + '/' + maxCap) : ('📌 CHỜ ' + curCount + '/' + maxCap);
+    var pFs = Math.max(7.5, Math.round(h * 0.036));
+    x.font = '800 ' + pFs + 'px "Baloo 2",system-ui,sans-serif';
+    var pw2 = x.measureText(pillTxt).width + pFs * 1.15, ph2 = pFs * 1.25;
+    var px2 = cxMid - pw2 / 2, py2 = trayY + trayH - ph2 * 0.45;
+    x.beginPath(); x.roundRect(px2, py2, pw2, ph2, ph2 * 0.5);
+    x.fillStyle = full ? '#BE123C' : '#5A3418';
+    x.fill();
+    x.lineWidth = Math.max(1, h * 0.0045); x.strokeStyle = '#FFF'; x.stroke();
+    x.fillStyle = full ? '#FFF' : '#FFE8A3';
+    x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillText(pillTxt, cxMid, py2 + ph2 / 2 + 0.5);
+
     x.restore();
   }
   function drawDioramaBook(x, w, h, pages, opts) {
@@ -5152,13 +5859,22 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     x.beginPath(); x.roundRect(px, py, pw, ph, h * 0.036);
     x.lineWidth = Math.max(1.2, h * 0.011); x.strokeStyle = 'rgba(114,76,38,0.45)'; x.stroke();
 
+    var showShelf = !!(opts.active && !opts.full && (shown < spreads() - 1 || pocketStack.length > 0));
     if (opts.title || (totalWant && !opts.full && (opts.active && (opts.active[0] || opts.active[1])))) {
       var barY = (D_TOP + D_H + 1) * 0.5 * h;
       if (opts.title) {
         x.fillStyle = '#5A3418';
-        x.font = '800 ' + Math.round(h * 0.065) + 'px "Baloo 2",system-ui,sans-serif';
+        x.font = '800 ' + Math.round(h * 0.058) + 'px "Baloo 2",system-ui,sans-serif';
         x.textAlign = 'left'; x.textBaseline = 'middle';
-        x.fillText(opts.title, px + h * 0.01, barY);
+        var titleStr = opts.title;
+        if (showShelf) {
+          var maxTitleW = dioramaShelfGeom(w, h, pocketMax()).x - (px + h * 0.01) - h * 0.025;
+          if (x.measureText(titleStr).width > maxTitleW && maxTitleW > 20) {
+            while (titleStr.length > 1 && x.measureText(titleStr + '…').width > maxTitleW) titleStr = titleStr.slice(0, -1);
+            titleStr += '…';
+          }
+        }
+        x.fillText(titleStr, px + h * 0.01, barY);
       }
       if (totalWant && !opts.full && opts.active && (opts.active[0] || opts.active[1])) {
         var rightEdge = px + pw - h * 0.01;
@@ -5189,6 +5905,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
         }
       }
     }
+    if (showShelf) drawDioramaShelf(x, w, h, now);
     x.restore();
   }
   function drawBook(x, w, h, pages, opts) {
@@ -5588,7 +6305,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
   function endFlip() {
     flip = null;
     tellScene();
-    if (!isScrapbook()) unpackPocket();
+    unpackPocket();
   }
   function slotScreen(sl) {
     var r = artCv.getBoundingClientRect(), pose = slotPose(sl, bookW, bookH, isScrapbook());
@@ -5597,7 +6314,15 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     pose.size *= scaleY; pose.box *= scaleY;
     return pose;
   }
-  function pocketScreen() { var r = artCv.getBoundingClientRect(); return { x: r.left + POCKET_U * bookW, y: r.top + POCKET_V * bookH }; }
+  function pocketScreen(slotIdx) {
+    var r = artCv.getBoundingClientRect(), scaleX = r.width / bookW, scaleY = r.height / bookH;
+    if (isScrapbook()) {
+      var g = dioramaShelfGeom(bookW, bookH, pocketMax());
+      var s = slotIdx !== undefined && g.slots[slotIdx] ? g.slots[slotIdx] : { x: g.x + g.w / 2, y: g.y + g.h / 2, r: g.step * 0.44 };
+      return { x: r.left + s.x * scaleX, y: r.top + s.y * scaleY, box: (s.r * 2.15 * scaleY) / Art.ART, rot: 0 };
+    }
+    return { x: r.left + POCKET_U * r.width, y: r.top + POCKET_V * r.height, box: 28, rot: -0.18 };
+  }
   function bookPct() { return lv && lv.targets.length ? Math.round(booked / lv.targets.length * 100) : 0; }
   function pageFull(list, now) { return list.every(function (s) { return s.filledAt >= 0 && now >= s.filledAt + 0.4; }); }
   function bookDone(now) { return !flip && shown >= spreads() - 1 && pageFull(left, now) && pageFull(right, now); }
@@ -5626,15 +6351,21 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     flights.push({ toPocket: true, x0: sx, y0: sy, x1: to.x, y1: to.y, t: 0, spin: 0, trail: 0, pts: [], design: type, hex: hexOfType(type), holo: !!holo, side: 1 });
     rings.push({ x: sx, y: sy, t: 0, dur: 0.36, r0: 12, r1: 68, hex: '#FFD531', w: 5.5 });
   }
-  /* Scrapbook Campaign Mode: a triple for a later spread flies into the right edge of the diorama to be saved. */
-  function launchCredit(type, sx, sy) {
-    var r = artCv.getBoundingClientRect(), tx = r.right - 14, ty = r.top + r.height * 0.52;
-    flights.push({ credit: true, x0: sx, y0: sy, x1: tx, y1: ty, t: -CHARGE, spin: 0, trail: 0, pts: [], design: type, hex: hexOfType(type), side: sx < tx ? 1 : -1 });
-    rings.push({ x: sx, y: sy, t: 0, dur: 0.28, r0: 12, r1: 52, hex: '#FFD654', w: 4 });
+  /* Scrapbook Campaign Mode: a triple for a later spread peels in mid-air and lands upright on the Diorama Standing Shelf! */
+  function launchCredit(type, sx, sy, holo) {
+    var slotIdx = Math.min(pocketMax() - 1, pocketCount());
+    var to = pocketScreen(slotIdx);
+    flights.push({
+      toPocket: true, creditStand: true, slotIdx: slotIdx,
+      x0: sx, y0: sy, x1: to.x, y1: to.y, t: -CHARGE, spin: 0, trail: 0, pts: [],
+      design: type, hex: hexOfType(type), holo: !!holo, side: sx < to.x ? 1 : -1
+    });
+    rings.push({ x: sx, y: sy, t: 0, dur: 0.3, r0: 12, r1: 58, hex: '#FFD654', w: 4.5 });
   }
   function stickIntoPocket(f) {
-    var to = pocketScreen();
-    pocketStack.push({ type: f.design, holo: f.holo });
+    var idx = f.slotIdx !== undefined ? f.slotIdx : Math.min(pocketMax() - 1, pocketStack.length);
+    var to = pocketScreen(idx);
+    pocketStack.push({ type: f.design, holo: f.holo, addedAt: performance.now() / 1000 });
     pocketPulse = 1;
     rings.push({ x: to.x, y: to.y, t: 0, dur: 0.38, r0: 6, r1: 52, hex: '#FFD531', w: 5.5 });
     rings.push({ x: to.x, y: to.y, t: -0.04, dur: 0.44, r0: 8, r1: 68, hex: f.hex, w: 3.5 });
@@ -5647,26 +6378,33 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     Snd.stick();
     buzz(15);
   }
-  /* As soon as the new spread opens, all stickers waiting in the Bookmark Pocket burst out and fly into their slots! */
+  /* As soon as the new spread opens, all stickers waiting in the Standing Shelf / Corner Pocket leap into their slots! */
   function unpackPocket() {
     if (!pendingUnpack.length) return;
     var list = pendingUnpack.slice();
     pendingUnpack = [];
-    var from = pocketScreen();
     pocketPulse = 1;
     Snd.magic && Snd.magic();
-    toast('✨ Sticker từ góc kẹp sổ bay vào trang mới!');
-    list.forEach(function (sl, i) {
+    toast(isScrapbook() ? '✨ Sticker từ Kệ Chờ nhảy vào cảnh mới!' : '✨ Sticker từ góc kẹp sổ bay vào trang mới!');
+    var jobs = list.map(function (sl) {
       var idx = -1;
-      for (var k = 0; k < pocketStack.length; k++) if (pocketStack[k].type === sl.type) { idx = k; break; }
-      var item = idx >= 0 ? pocketStack.splice(idx, 1)[0] : pocketStack.pop();
-      var to = slotScreen(sl);
+      for (var k = 0; k < pocketStack.length; k++) {
+        if (!pocketStack[k]._taken && pocketStack[k].type === sl.type) { idx = k; break; }
+      }
+      if (idx < 0) for (var k2 = pocketStack.length - 1; k2 >= 0; k2--) if (!pocketStack[k2]._taken) { idx = k2; break; }
+      var item = idx >= 0 ? pocketStack[idx] : null;
+      if (item) item._taken = true;
+      return { sl: sl, item: item, from: pocketScreen(idx >= 0 ? idx : 0) };
+    });
+    pocketStack = pocketStack.filter(function (it) { return !it._taken; });
+    jobs.forEach(function (jb, i) {
+      var to = slotScreen(jb.sl);
       flights.push({
-        slot: sl, fromPocket: true, x0: from.x, y0: from.y, x1: to.x, y1: to.y,
-        t: -i * 0.14, spin: 0, trail: 0, pts: [], design: sl.type, hex: hexOfType(sl.type),
-        holo: !!(item && item.holo), side: -1
+        slot: jb.sl, fromPocket: true, x0: jb.from.x, y0: jb.from.y, x1: to.x, y1: to.y,
+        t: -i * 0.14, spin: 0, trail: 0, pts: [], design: jb.sl.type, hex: hexOfType(jb.sl.type),
+        holo: !!(jb.item && jb.item.holo), side: -1
       });
-      rings.push({ x: from.x, y: from.y, t: -i * 0.14, dur: 0.36, r0: 8, r1: 58, hex: '#FFD531', w: 5.5 });
+      rings.push({ x: jb.from.x, y: jb.from.y, t: -i * 0.14, dur: 0.36, r0: 8, r1: 58, hex: '#FFD531', w: 5.5 });
     });
   }
   /* The slap: the sticker lands in its slot with a physical book bump, shockwaves, 4-point star sparkles and a satisfying stick sound. */
@@ -6000,7 +6738,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
       if (reduced) { flights.splice(i, 1); if (f.toPocket) stickIntoPocket(f); else stickInto(f); continue; }
       var sp0 = stickerSprite(f.design);
       if (!f.pts) f.pts = [];
-      if (f.toPocket || f.fromPocket) {
+      if ((f.toPocket && !f.creditStand) || f.fromPocket) {
         var MERGE_PK = 0.16, FLY_PK = 0.48;
         if (f.t < MERGE_PK) {
           var mpk = f.t / MERGE_PK;
@@ -6011,9 +6749,9 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
           continue;
         }
         var pPk = Math.min(1, (f.t - MERGE_PK) / FLY_PK), ePk = ease(pPk);
-        var toPk = f.toPocket ? pocketScreen() : slotScreen(f.slot);
+        var toPk = f.toPocket ? pocketScreen(f.slotIdx) : slotScreen(f.slot);
         f.x1 = toPk.x; f.y1 = toPk.y;
-        if (f.fromPocket) { var fp0 = pocketScreen(); f.x0 = fp0.x; f.y0 = fp0.y; }
+        if (f.fromPocket && !isScrapbook()) { var fp0 = pocketScreen(f.slotIdx); f.x0 = fp0.x; f.y0 = fp0.y; }
         var mxPk = (f.x0 + f.x1) / 2 + f.side * (f.fromPocket ? -45 : -72), myPk = Math.min(f.y0, f.y1) - (f.fromPocket ? 92 : 128);
         var xPk = (1 - ePk) * (1 - ePk) * f.x0 + 2 * (1 - ePk) * ePk * mxPk + ePk * ePk * f.x1;
         var yPk = (1 - ePk) * (1 - ePk) * f.y0 + 2 * (1 - ePk) * ePk * myPk + ePk * ePk * f.y1;
@@ -6079,7 +6817,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
         continue;
       }
       var p = Math.min(1, (f.t - MERGE - PEEL) / FLY);
-      var to = f.credit ? { x: f.x1, y: f.y1, box: 28, rot: 0.2 } : slotScreen(f.slot);
+      var to = f.creditStand ? pocketScreen(f.slotIdx) : (f.credit ? { x: f.x1, y: f.y1, box: 28, rot: 0.2 } : slotScreen(f.slot));
       f.x1 = to.x; f.y1 = to.y;
       var sx = stageX, sy = stageY;
       var windEnd = 0.24, dive = p <= windEnd ? 0 : Math.pow((p - windEnd) / (1 - windEnd), 2.2);
@@ -6094,12 +6832,12 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
       var x = bx + (-ty / tLen) * sway, y = by + (tx / tLen) * sway;
       f.pts.push({ x: x, y: y });
       if (f.pts.length > 18) f.pts.shift();
-      var impactScale = f.credit ? (to.box / 54) : (to.box / 54) * 1.36;
+      var impactScale = (f.creditStand || f.credit) ? (to.box / 54) : (to.box / 54) * 1.36;
       var curScale = p <= windEnd
         ? (HERO * 1.06) + (HERO * 1.10 - HERO * 1.06) * ease(p / windEnd)
         : (HERO * 1.10) + (impactScale - HERO * 1.10) * dive;
       drawRibbon(f.pts, f.holo ? '#FFD531' : f.hex, 54 * curScale * 0.3, 1 - dive * 0.15);
-      if (dive > 0.35 && !f.credit) {
+      if (dive > 0.35 && !f.credit && !f.creditStand) {
         drawHoverShadow(x, y + (1 - dive) * 26 + 3, to.box * 0.42, ((dive - 0.35) / 0.65) * 0.28);
       }
       f.trail += dt;
@@ -6110,7 +6848,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
       var bank = Math.max(-0.28, Math.min(0.28, tx * 0.00075)) * Math.sin(dive * Math.PI);
       var swayRot = Math.cos(p * TAU * 0.95) * (1 - dive) * 0.15 * f.side;
       var fRot = (-0.08 * f.side) * (1 - dive) + (to.rot || 0) * dive + bank + swayRot;
-      var flyAmp = f.credit ? 19 * (1 - dive) : 19 + (15 - 19) * dive;
+      var flyAmp = (f.credit || f.creditStand) ? 19 * (1 - dive) : 19 + (15 - 19) * dive;
       drawUndulatingSticker(f, sp0.front, Art.SPR, x, y, curScale, fRot, {
         amp: flyAmp,
         freq: 5.2,
@@ -6119,7 +6857,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
         sheen: p < 0.32 ? p / 0.32 : undefined,
         liftShadow: (1 - dive) * 6
       });
-      if (p >= 1) { flights.splice(i, 1); stickInto(f); }
+      if (p >= 1) { flights.splice(i, 1); if (f.creditStand) stickIntoPocket(f); else stickInto(f); }
     }
     for (var fi = flyFloats.length - 1; fi >= 0; fi--) {
       var fl = flyFloats[fi];
@@ -6185,7 +6923,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     rings.push({ x: pk.x, y: pk.y, t: 0, dur: 0.45, r0: 10, r1: 66, hex: '#E11D48', w: 6 });
     rings.push({ x: sx, y: sy, t: 0, dur: 0.42, r0: 8, r1: 54, hex: '#E11D48', w: 5 });
     blockBeams.push({ x0: sx, y0: sy, t: 0, dur: 0.85 });
-    toast('🔒 Kẹp Trang Sau đã đầy (' + pocketCount() + '/' + pocketMax() + ')! Sticker trang sau không thể merge — hãy dán xong trang này trước!');
+    toast((isScrapbook() ? '🔒 Kệ Đứng Trang Sau đã đầy (' : '🔒 Góc Kẹp Trang Sau đã đầy (') + pocketCount() + '/' + pocketMax() + ')! Sticker trang sau không thể merge — hãy dán xong trang này trước!');
     if (!pocketTutShown) {
       pocketTutShown = true;
       setTimeout(function () { if (running) showPocketTutorial(true); }, 550);
@@ -6203,8 +6941,13 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
       credit[d.type] = (credit[d.type] || 0) + 1;
       booked++;
       if (isScrapbook()) {
-        launchCredit(d.type, r.left + d.x, r.top + d.y);
-        toast('Cất cho bước sau!');
+        launchCredit(d.type, r.left + d.x, r.top + d.y, d.holo);
+        var campCount = pocketCount();
+        if (campCount >= pocketMax()) {
+          toast('🔒 Kệ Đứng Trang Sau đã ĐẦY (' + campCount + '/' + pocketMax() + ')! Hãy dán trang hiện tại trước!');
+        } else {
+          toast('📌 Đã đặt lên Kệ Đứng Trang Sau (' + campCount + '/' + pocketMax() + ')!');
+        }
       } else {
         launchPocket(d.type, r.left + d.x, r.top + d.y, d.holo);
         var newCount = pocketCount();
@@ -6297,21 +7040,18 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
       step(2, p2, '<b>Đủ 3 cái giống nhau</b> thì nổ, và một sticker <b>bay lên dán vào ô</b> của nó trên trang.');
       var p3 = el('span', 'pic wait'); p3.appendChild(icon(other, 22)); p3.appendChild(icon(want, 22)); p3.appendChild(el('i'));
       step(3, p3, 'Khay có <b>7 ô</b>. Ưu tiên gom cho đủ bộ đang dở, đừng mở quá nhiều loại.');
-      if (!isScrapbook()) {
-        var p4 = el('span', 'pic wait'); p4.appendChild(icon(other, 22)); p4.appendChild(el('b', '', '🔖' + pocketMax()));
-        step(4, p4, '<b>Góc Kẹp Trang Sau (Tối đa ' + pocketMax() + ' chỗ):</b> Bộ 3 của trang sau sẽ bay tạm vào góc sổ. <b>Khi đầy (' + pocketMax() + '/' + pocketMax() + '), sticker chỉ còn chỗ ở trang sau sẽ KHÔNG THỂ merge!</b>');
-      }
+      var isCamp = isScrapbook();
+      var p4 = el('span', 'pic wait'); p4.appendChild(icon(other, 22)); p4.appendChild(el('b', '', (isCamp ? '📌' : '🔖') + pocketMax()));
+      step(4, p4, '<b>' + (isCamp ? 'Kệ Đứng Trang Sau' : 'Góc Kẹp Trang Sau') + ' (Tối đa ' + pocketMax() + ' chỗ):</b> Bộ 3 của trang sau sẽ bay tạm lên ' + (isCamp ? 'kệ gỗ đứng trên hộp Diorama' : 'góc sổ') + '. <b>Khi đầy (' + pocketMax() + '/' + pocketMax() + '), sticker chỉ còn chỗ ở trang sau sẽ KHÔNG THỂ merge!</b>');
       card.appendChild(ol);
       var rule = el('p', 'rule');
       rule.innerHTML = '<b>Thắng:</b> bóc hết tờ, dán kín mọi trang sổ.<br><b>Thua:</b> khay đầy 7 ô.';
       card.appendChild(rule);
       var a = el('div', 'acts');
-      if (!isScrapbook()) {
-        a.appendChild(btn('📖 Xem chi tiết Luật Kẹp Trang Sau', 'wide', function () {
-          close();
-          showPocketTutorial(false, then);
-        }));
-      }
+      a.appendChild(btn('📖 Xem chi tiết Luật ' + (isCamp ? 'Kệ Trang Sau' : 'Kẹp Trang Sau'), 'wide', function () {
+        close();
+        showPocketTutorial(false, then);
+      }));
       a.appendChild(btn('Chơi thôi!', 'primary big wide', function () {
         close();
         Game.setPaused(false);
@@ -6334,10 +7074,24 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
   function triggerDemoPocketFullBlock() {
     if (!lv || !running) return;
     var maxC = pocketMax(), laterT = findLaterType();
-    /* Fill pocket up to maxCap immediately so it hits FULL state */
+    var nowSec = performance.now() / 1000, usedByT = Object.assign({}, credit), pool = [];
+    for (var p = (shown + 1) * 2; p < lv.missions.length; p++) {
+      for (var k = 0; k < lv.missions[p].length; k++) {
+        var mt = lv.missions[p][k];
+        if (!slotFor(mt)) pool.push(mt);
+      }
+    }
+    /* Prefer distinct future types other than laterT so laterT keeps its target slot on future spreads */
+    var picks = pool.filter(function (mt) { return mt !== laterT; });
     while (pocketCount() < maxC) {
-      pocketStack.push({ type: laterT, holo: false });
-      credit[laterT] = (credit[laterT] || 0) + 1;
+      var fillT = laterT;
+      for (var pi = 0; pi < picks.length; pi++) {
+        var cand = picks[pi];
+        var totalLater = pool.filter(function (mt) { return mt === cand; }).length;
+        if ((usedByT[cand] || 0) < totalLater) { fillT = cand; usedByT[cand] = (usedByT[cand] || 0) + 1; break; }
+      }
+      pocketStack.push({ type: fillT, holo: false, addedAt: nowSec });
+      credit[fillT] = (credit[fillT] || 0) + 1;
     }
     pocketPulse = 1;
     pocketShake = 1;
@@ -6347,14 +7101,16 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
   function showPocketTutorial(isBlockedContext, then) {
     if (!lv) return;
     Game.setPaused(true);
-    var maxC = pocketMax(), sampleType = findLaterType() || lv.targets[0];
+    var maxC = pocketMax(), sampleType = findLaterType() || lv.targets[0], isCamp = isScrapbook();
     var animRaf = 0;
     modal(function (card, close) {
       card.classList.add('howto', 'pocket-tut');
-      var badge = el('div', 'tut-badge', isBlockedContext ? '🔒 CẢNH BÁO: KẸP TRANG SAU ĐÃ ĐẦY (' + maxC + '/' + maxC + ')!' : '🔖 LUẬT MỚI: GÓC KẸP TRANG SAU');
+      var badge = el('div', 'tut-badge', isBlockedContext
+        ? ('🔒 CẢNH BÁO: ' + (isCamp ? 'KỆ ĐỨNG' : 'KẸP TRANG SAU') + ' ĐÃ ĐẦY (' + maxC + '/' + maxC + ')!')
+        : (isCamp ? '📌 LUẬT MỚI: KỆ ĐỨNG TRANG SAU' : '🔖 LUẬT MỚI: GÓC KẸP TRANG SAU'));
       card.appendChild(badge);
-      card.appendChild(el('h2', '', 'Giới hạn Kẹp Trang Sau (' + maxC + ' chỗ)'));
-      /* Interactive animated canvas illustrating the 2 states: Pocket Open vs Pocket Full (Merge Blocked) */
+      card.appendChild(el('h2', '', 'Giới hạn ' + (isCamp ? 'Kệ Trang Sau' : 'Kẹp Trang Sau') + ' (' + maxC + ' chỗ)'));
+      /* Interactive animated canvas illustrating the 2 states: Shelf/Pocket Open vs Full (Merge Blocked) */
       var vizWrap = el('div', 'tut-viz'), vc = el('canvas'), vw = 290, vh = 104, rr = Math.min(root.devicePixelRatio || 1, 2);
       vc.width = vw * rr; vc.height = vh * rr; vc.style.width = vw + 'px'; vc.style.height = vh + 'px';
       var vx = vc.getContext('2d');
@@ -6376,7 +7132,9 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
         vx.fillStyle = isFullPhase ? '#BE123C' : '#92400E';
         vx.font = '800 11px "Baloo 2",system-ui,sans-serif';
         vx.textAlign = 'left'; vx.textBaseline = 'top';
-        vx.fillText(isFullPhase ? '❌ KHI KẸP ĐẦY (' + maxC + '/' + maxC + '): CẤM MERGE TRANG SAU!' : '✅ KHI KẸP CÒN CHỖ (1/' + maxC + '): BAY VÀO GÓC SỔ!', 12, 8);
+        vx.fillText(isFullPhase
+          ? ('❌ KHI ' + (isCamp ? 'KỆ' : 'KẸP') + ' ĐẦY (' + maxC + '/' + maxC + '): CẤM MERGE TRANG SAU!')
+          : ('✅ KHI ' + (isCamp ? 'KỆ' : 'KẸP') + ' CÒN CHỖ (1/' + maxC + '): ' + (isCamp ? 'ĐỨNG LÊN KỆ!' : 'BAY VÀO GÓC SỔ!')), 12, 8);
         /* Left: 3 Tray Slots */
         var sp = stickerSprite(sampleType);
         for (var i = 0; i < 3; i++) {
@@ -6420,23 +7178,45 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
           var fx = (1 - fp) * 70 + fp * 238, fy = (1 - fp) * 64 + fp * 58 - Math.sin(fp * Math.PI) * 26;
           vx.drawImage(sp.front, fx - 13, fy - 13, 26, 26);
         }
-        /* Right: Corner Pocket */
+        /* Right: Diorama Wooden Standing Shelf OR Pro Corner Pocket */
         var px = 244, py = 60, pr = 26;
         vx.save();
         vx.translate(px, py);
-        vx.beginPath(); vx.roundRect(-pr, -pr, pr * 2, pr * 2, 10);
-        vx.fillStyle = '#FFF8E4'; vx.fill();
-        vx.lineWidth = 2; vx.strokeStyle = isFullPhase ? '#E11D48' : '#F59E0B'; vx.stroke();
-        vx.drawImage(sp.front, -14, -18, 26, 26);
-        var fg = vx.createLinearGradient(-pr, pr, pr, -pr);
-        fg.addColorStop(0, isFullPhase ? '#BE123C' : '#FF5A6E');
-        fg.addColorStop(1, isFullPhase ? '#FF5A6E' : '#FFB326');
-        vx.beginPath();
-        vx.moveTo(-pr, pr * 0.5); vx.lineTo(pr * 0.5, -pr); vx.lineTo(pr, -pr); vx.lineTo(pr, pr); vx.lineTo(-pr, pr);
-        vx.closePath(); vx.fillStyle = fg; vx.fill();
-        vx.fillStyle = '#FFF'; vx.font = '800 10px "Baloo 2",system-ui,sans-serif';
-        vx.textAlign = 'center'; vx.textBaseline = 'middle';
-        vx.fillText(isFullPhase ? '🔒 ' + maxC + '/' + maxC : '🔖 1/' + maxC, 4, 11);
+        if (isCamp) {
+          /* Khay gỗ gắn thẳng (không khung trắng bao quanh) + khe rãnh gài sticker */
+          vx.beginPath(); vx.roundRect(-pr, 3, pr * 2, 13, 5);
+          vx.fillStyle = isFullPhase ? '#E11D48' : '#B7793E'; vx.fill();
+          vx.lineWidth = 1.6; vx.strokeStyle = isFullPhase ? '#FFE4E6' : '#5E3415'; vx.stroke();
+          var standCols = maxC;
+          for (var sc = 0; sc < standCols; sc++) {
+            var sx0 = (-pr + 10) + sc * ((pr * 2 - 20) / Math.max(1, standCols - 1));
+            vx.fillStyle = isFullPhase ? '#881337' : '#5E3415';
+            vx.beginPath(); vx.roundRect(sx0 - 7, 5, 14, 4, 2); vx.fill();
+            if (isFullPhase || sc === 0) {
+              vx.drawImage(sp.front, sx0 - 11, -15, 22, 22);
+            }
+          }
+          vx.fillStyle = isFullPhase ? '#BE123C' : '#5A3418';
+          vx.beginPath(); vx.roundRect(-22, 14, 44, 13, 6); vx.fill();
+          vx.lineWidth = 1.2; vx.strokeStyle = '#FFF'; vx.stroke();
+          vx.fillStyle = '#FFF'; vx.font = '800 8.5px "Baloo 2",system-ui,sans-serif';
+          vx.textAlign = 'center'; vx.textBaseline = 'middle';
+          vx.fillText(isFullPhase ? '🔒 ' + maxC + '/' + maxC : '📌 1/' + maxC, 0, 20.5);
+        } else {
+          vx.beginPath(); vx.roundRect(-pr, -pr, pr * 2, pr * 2, 10);
+          vx.fillStyle = '#FFF8E4'; vx.fill();
+          vx.lineWidth = 2; vx.strokeStyle = isFullPhase ? '#E11D48' : '#F59E0B'; vx.stroke();
+          vx.drawImage(sp.front, -14, -18, 26, 26);
+          var fg = vx.createLinearGradient(-pr, pr, pr, -pr);
+          fg.addColorStop(0, isFullPhase ? '#BE123C' : '#FF5A6E');
+          fg.addColorStop(1, isFullPhase ? '#FF5A6E' : '#FFB326');
+          vx.beginPath();
+          vx.moveTo(-pr, pr * 0.5); vx.lineTo(pr * 0.5, -pr); vx.lineTo(pr, -pr); vx.lineTo(pr, pr); vx.lineTo(-pr, pr);
+          vx.closePath(); vx.fillStyle = fg; vx.fill();
+          vx.fillStyle = '#FFF'; vx.font = '800 10px "Baloo 2",system-ui,sans-serif';
+          vx.textAlign = 'center'; vx.textBaseline = 'middle';
+          vx.fillText(isFullPhase ? '🔒 ' + maxC + '/' + maxC : '🔖 1/' + maxC, 4, 11);
+        }
         vx.restore();
         animRaf = requestAnimationFrame(drawTutViz);
       }
@@ -6449,13 +7229,17 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
         t.innerHTML = html;
         li.appendChild(num); li.appendChild(bEl); li.appendChild(t); ol.appendChild(li);
       }
-      rStep(1, '🔖 ' + maxC, '<b>Giới hạn ' + maxC + ' chỗ kẹp:</b> Khi gom đủ 3 sticker thuộc <b>trang sau</b>, chúng sẽ bay vào <b>Góc Kẹp Sổ</b> (màn này tối đa <b>' + maxC + ' chỗ</b>).');
-      rStep(2, '🔒 ĐẦY', '<b>Đầy kẹp = Chặn Merge:</b> Khi Góc Kẹp đã đầy (<b>' + maxC + '/' + maxC + '</b>), các bộ 3 sticker <b>chỉ còn chỗ ở trang sau sẽ KHÔNG THỂ merge</b> và nằm chờ trong khay (chiếm 3 ô khay)!');
-      rStep(3, '📖 LẬT', '<b>Cách giải cứu:</b> Hãy ưu tiên bóc sticker của <b>trang đang mở</b> để lật trang. Vừa sang trang mới, Góc Kẹp sẽ bung ra và bộ 3 đang kẹt dưới khay sẽ <b>tự động merge</b>!');
+      rStep(1, (isCamp ? '📌 ' : '🔖 ') + maxC, isCamp
+        ? ('<b>Giới hạn ' + maxC + ' chỗ đứng:</b> Khi gom đủ 3 sticker thuộc <b>trang sau</b>, sticker sẽ bay lên đứng chờ trên <b>Kệ Gỗ Diorama</b> (màn này tối đa <b>' + maxC + ' chỗ</b>).')
+        : ('<b>Giới hạn ' + maxC + ' chỗ kẹp:</b> Khi gom đủ 3 sticker thuộc <b>trang sau</b>, chúng sẽ bay vào <b>Góc Kẹp Sổ</b> (màn này tối đa <b>' + maxC + ' chỗ</b>).'));
+      rStep(2, '🔒 ĐẦY', '<b>Đầy ' + (isCamp ? 'kệ' : 'kẹp') + ' = Chặn Merge:</b> Khi ' + (isCamp ? 'Kệ Trang Sau' : 'Góc Kẹp') + ' đã đầy (<b>' + maxC + '/' + maxC + '</b>), các bộ 3 sticker <b>chỉ còn chỗ ở trang sau sẽ KHÔNG THỂ merge</b> và nằm chờ trong khay (chiếm 3 ô khay)!');
+      rStep(3, '📖 LẬT', isCamp
+        ? '<b>Cách giải cứu:</b> Hãy ưu tiên bóc sticker của <b>trang đang mở</b> để chuyển sang phần sau. Vừa qua trang mới, sticker đứng trên kệ sẽ <b>nhảy vào khung</b> và bộ 3 đang kẹt dưới khay sẽ <b>tự động merge</b>!'
+        : '<b>Cách giải cứu:</b> Hãy ưu tiên bóc sticker của <b>trang đang mở</b> để lật trang. Vừa sang trang mới, Góc Kẹp sẽ bung ra và bộ 3 đang kẹt dưới khay sẽ <b>tự động merge</b>!');
       card.appendChild(ol);
       var a = el('div', 'acts');
       if (!isBlockedContext) {
-        a.appendChild(btn('🧪 Xem thử: Làm đầy Kẹp & Chặn Merge ngay!', 'wide', function () {
+        a.appendChild(btn('🧪 Xem thử: Làm đầy ' + (isCamp ? 'Kệ' : 'Kẹp') + ' & Chặn Merge ngay!', 'wide', function () {
           if (animRaf) cancelAnimationFrame(animRaf);
           close();
           Game.setPaused(false);
@@ -6479,8 +7263,18 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     if (isScrapbook()) showHowTo(); else showPocketTutorial(false);
   });
   artCv.addEventListener('pointerdown', function (e) {
-    if (!lv || !running || isScrapbook()) return;
+    if (!lv || !running) return;
     var r = artCv.getBoundingClientRect();
+    if (isScrapbook()) {
+      if (shown >= spreads() - 1 && !pocketStack.length) return;
+      var g = dioramaShelfGeom(bookW, bookH, pocketMax());
+      var px = (e.clientX - r.left) * (bookW / r.width), py = (e.clientY - r.top) * (bookH / r.height);
+      if (px >= g.x - 8 && px <= g.x + g.w + 8 && py >= g.y - 8 && py <= g.y + g.h + 10) {
+        Snd.unlock(); Snd.click();
+        showPocketTutorial(false);
+      }
+      return;
+    }
     var u = (e.clientX - r.left) / r.width, v = (e.clientY - r.top) / r.height;
     if (Math.abs(u - POCKET_U) < 0.14 && Math.abs(v - POCKET_V) < 0.18) {
       Snd.unlock(); Snd.click();
@@ -6536,10 +7330,12 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
   function botTick(now) {
     if (!botActive || !running || winPending || flip || flights.length || Game.busy()) return;
     var s = Game.debugState();
+    if (s.state === 'paused') return;
     if (s.state !== 'play') { stopBot(); return; }
     if (s.animating || now < botTimer) return;
-    if (Game.debugStep() === null) { stopBot(); return; }
-    botTimer = now + 0.26;
+    var res = Game.debugStep();
+    if (res === null) { stopBot(); return; }
+    botTimer = now + (res === 'wait' ? 0.08 : 0.24);
   }
   function toggleBot() {
     if (!lv || !running) return;
@@ -6551,6 +7347,24 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
   $('botBtn').addEventListener('click', toggleBot);
 
   /* ---------- level flow ---------- */
+  function getBookState() {
+    if (!lv) return null;
+    var openWant = {}, laterWant = {}, decs = lv.decoys || (lv.cfg && lv.cfg.decoys) || [];
+    left.concat(right).forEach(function (sl) {
+      if (sl.filledAt < 0 && !sl.reserved) openWant[sl.type] = (openWant[sl.type] || 0) + 1;
+    });
+    for (var p = (shown + 1) * 2; p < lv.missions.length; p++) {
+      lv.missions[p].forEach(function (mt) { laterWant[mt] = (laterWant[mt] || 0) + 1; });
+    }
+    Object.keys(credit).forEach(function (k) {
+      if (laterWant[k]) laterWant[k] = Math.max(0, laterWant[k] - credit[k]);
+    });
+    return {
+      shown: shown, spreads: spreads(), pocketUsed: pocketCount(), pocketMax: pocketMax(),
+      openWant: openWant, laterWant: laterWant, flip: !!flip,
+      missions: lv.missions, decoys: decs, credit: credit
+    };
+  }
   function startLevel(i, mode) {
     if (mode) { activeMode = mode; save.mode = mode; persist(); }
     var useCampaign = activeMode === 'campaign';
@@ -6567,7 +7381,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     if (devBar) devBar.hidden = useCampaign;
     var oldToggle = document.getElementById('flapToggle'); if (oldToggle) oldToggle.remove();
     var oldNote = document.getElementById('scrapbookLesson'); if (oldNote) oldNote.remove();
-    $('lvNum').textContent = (lv.def.story ? 'Câu chuyện' : 'Trang ' + (i + 1)) + (lv.def.hard ? ' · KHÓ' : '') + (useCampaign ? '' : ' · 🔖' + pocketMax());
+    $('lvNum').textContent = (lv.def.story ? 'Câu chuyện' : 'Trang ' + (i + 1)) + (lv.def.hard ? ' · KHÓ' : '') + ' · ' + (useCampaign ? '📌' : '🔖') + pocketMax();
     $('play').classList.toggle('hard', !!lv.def.hard);
     if (lv.def.hard) hardSplash();
     flip = null; booked = 0;
@@ -6589,18 +7403,30 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
           if (slotFor(t)) return true;
           var later = 0;
           for (var p = (shown + 1) * 2; p < lv.missions.length; p++) lv.missions[p].forEach(function (mt) { if (mt === t) later++; });
-          return later > (credit[t] || 0);
+          return later > (credit[t] || 0) && pocketCount() < pocketMax();
         },
         canClearCount: function (t, pending) {
           if (flip) return false;
           var openRoom = left.concat(right).filter(function (sl) { return sl.type === t && sl.filledAt < 0 && !sl.reserved; }).length;
+          var pendOfT = pending.filter(function (type) { return type === t; }).length;
+          if (openRoom > pendOfT) return true;
           var laterRoom = 0;
           for (var p = (shown + 1) * 2; p < lv.missions.length; p++) {
             lv.missions[p].forEach(function (mt) { if (mt === t) laterRoom++; });
           }
-          var room = openRoom + Math.max(0, laterRoom - (credit[t] || 0));
-          return room > pending.filter(function (type) { return type === t; }).length;
+          if (laterRoom - (credit[t] || 0) - (pendOfT - openRoom) <= 0) return false;
+          var pendByType = {}, pendCredit = 0;
+          pending.forEach(function (pt) { pendByType[pt] = (pendByType[pt] || 0) + 1; });
+          Object.keys(pendByType).forEach(function (ptStr) {
+            var pt = +ptStr;
+            var oRoom = left.concat(right).filter(function (sl) { return sl.type === pt && sl.filledAt < 0 && !sl.reserved; }).length;
+            if (pendByType[ptStr] > oRoom) pendCredit += (pendByType[ptStr] - oRoom);
+          });
+          return pocketCount() + pendCredit < pocketMax();
         },
+        isCreditFull: function (t) { return !!flip || (destinationFor(t) === 'credit' && isPocketFull()); },
+        mergeBlocked: onMergeBlocked,
+        bookState: getBookState,
         scrapbookDeny: function (reason) { toast({ capacity: 'Cặp đôi cần 2 ô trống trước khi bóc.', page: 'Bộ ba này thuộc trang sau. Hoàn thành trang đang mở trước.', paper: 'Bóc các sticker giữ mép tờ giấy tím trước. Hết sticker giữ mép, giấy tự mở cả nhóm.', flap: 'Lật giấy bằng nút Lật giấy (F) để mở vùng này.', key: 'Tìm sticker mang chìa cùng chữ để mở cả dải ruy băng.', glue: 'Ghép thêm bộ ba đang cần trên sổ để làm tan một lớp băng.', covered: 'Bóc sticker ở trên trước.' }[reason] || 'Sticker này chưa bóc được.'); },
         flap: function (side) { var b = document.getElementById('flapToggle'); if (b) { b.textContent = 'Lật giấy · ' + (side ? 'B' : 'A') + ' (F)'; b.setAttribute('aria-pressed', String(!!side)); } },
         lessonDone: function (kind) { save.seen[kind] = true; persist(); var note = document.getElementById('scrapbookLesson'); if (note) note.remove(); toast('Đã thử! Giờ tự chọn đường bóc nhé.'); },
@@ -6623,6 +7449,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
         clear: onClear,
         canMerge: canMergeType,
         mergeBlocked: onMergeBlocked,
+        bookState: getBookState,
         shake: shakeStage,
         win: function (r) { running = false; winPending = r; },
         lose: onLose
@@ -6856,6 +7683,7 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
   }
   function showHome() {
     Game.stop();
+    stopBot();
     lv = null; flights = []; sparks = []; rings = []; liners = []; flyFloats = []; blockBeams = []; flip = null; running = false;
     $('play').hidden = true;
     var box = $('home');
@@ -6864,18 +7692,18 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
     var logo = el('div', 'logo');
     logo.appendChild(el('h1', '', 'Sổ Sticker'));
     logo.appendChild(el('p', '', activeMode === 'campaign'
-      ? 'Chiến dịch Diorama 3D 50 màn: băng tuyết, giấy bí mật, chìa khóa, cặp đôi & giấy gấp!'
-      : 'Bóc sticker Hologram, xé băng keo, quản lý Góc Kẹp Trang Sau & ghép bộ 3 sống dậy!'));
+      ? 'Diorama Box 3D (50 màn): kệ đứng trang sau, băng tuyết, giấy bí mật, chìa khóa & giấy gấp!'
+      : 'Bản Tranh Sticker Pro: bóc Hologram, xé băng keo, Góc Kẹp Trang Sau & ghép bộ 3 sống dậy!'));
     box.appendChild(logo);
 
     var tabs = el('div', 'mode-tabs');
-    var proTab = el('button', 'mode-tab' + (activeMode === 'pro' ? ' on' : ''), '✨ Sổ Sticker Pro (' + H.PAGES.length + ')');
-    proTab.type = 'button';
-    proTab.addEventListener('click', function () { Snd.unlock(); Snd.click(); activeMode = 'pro'; save.mode = 'pro'; persist(); showHome(); });
-    var campTab = el('button', 'mode-tab' + (activeMode === 'campaign' ? ' on' : ''), '📖 Chiến Dịch Puzzle (' + H.CAMPAIGN.length + ')');
+    var campTab = el('button', 'mode-tab' + (activeMode === 'campaign' ? ' on' : ''), '📖 Diorama Box (' + H.CAMPAIGN.length + ')');
     campTab.type = 'button';
     campTab.addEventListener('click', function () { Snd.unlock(); Snd.click(); activeMode = 'campaign'; save.mode = 'campaign'; persist(); showHome(); });
-    tabs.appendChild(proTab); tabs.appendChild(campTab);
+    var proTab = el('button', 'mode-tab' + (activeMode === 'pro' ? ' on' : ''), '✨ Bản Tranh (' + H.PAGES.length + ')');
+    proTab.type = 'button';
+    proTab.addEventListener('click', function () { Snd.unlock(); Snd.click(); activeMode = 'pro'; save.mode = 'pro'; persist(); showHome(); });
+    tabs.appendChild(campTab); tabs.appendChild(proTab);
     box.appendChild(tabs);
 
     var useCamp = activeMode === 'campaign';

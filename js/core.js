@@ -244,8 +244,80 @@
   }
   function createRuleState(level) {
     return revealRules({ tiles: level.stickers, covers: level.covers || [], coverOpened: {}, coverOpening: {}, removed: [], revealed: [], opened: {}, tray: [], merges: 0,
+      credit: {}, pocketCap: level.cfg.pocketCap || 2,
       peeled: 0, cap: BASE_CAP, flap: 0, spread: 0, missions: level.cfg.missions || [], decoys: level.cfg.decoys || [],
       filled: (level.cfg.missions || []).map(function (p) { return p.map(function () { return false; }); }) });
+  }
+  function laterRoomOf(s, type) {
+    var need = 0;
+    for (var p = (s.spread + 1) * 2; p < s.missions.length; p++) {
+      for (var k = 0; k < s.missions[p].length; k++) if (s.missions[p][k] === type) need++;
+    }
+    return Math.max(0, need - ((s.credit && s.credit[type]) || 0));
+  }
+  function creditUsed(s) {
+    var sum = 0;
+    if (s.credit) Object.keys(s.credit).forEach(function (k) { sum += s.credit[k] || 0; });
+    return sum;
+  }
+  function drainReadyTrayTriples(n) {
+    var settled = true;
+    while (settled) {
+      settled = false;
+      var seen = {};
+      n.tray.forEach(function (v) { seen[v] = (seen[v] || 0) + 1; });
+      var types = Object.keys(seen);
+      for (var ti = 0; ti < types.length; ti++) {
+        var t = +types[ti];
+        if (seen[t] < 3) continue;
+        var page = -1, slot = -1;
+        for (var p = n.spread * 2; p < Math.min(n.missions.length, n.spread * 2 + 2) && page < 0; p++) {
+          for (var k = 0; k < n.missions[p].length; k++) if (n.missions[p][k] === t && !n.filled[p][k]) { page = p; slot = k; break; }
+        }
+        if (page >= 0) {
+          n.filled[page][slot] = true;
+        } else if (laterRoomOf(n, t) > 0 && creditUsed(n) < (n.pocketCap || 2)) {
+          n.credit[t] = (n.credit[t] || 0) + 1;
+        } else {
+          continue;
+        }
+        var rem = 3;
+        n.tray = n.tray.filter(function (v) { if (v === t && rem) { rem--; return false; } return true; });
+        n.merges++;
+        settled = true;
+        break;
+      }
+      while (n.spread * 2 + 2 < n.missions.length && n.filled.slice(n.spread * 2, n.spread * 2 + 2).every(function (p) { return p.every(Boolean); })) {
+        n.spread++;
+        for (var sp = n.spread * 2; sp < Math.min(n.missions.length, n.spread * 2 + 2); sp++) {
+          for (var sk = 0; sk < n.missions[sp].length; sk++) {
+            var st = n.missions[sp][sk];
+            if (!n.filled[sp][sk] && n.credit[st] > 0) { n.credit[st]--; n.filled[sp][sk] = true; }
+          }
+        }
+        settled = true;
+      }
+    }
+  }
+  function recordRuleBurst(s, type) {
+    if (!s || !s.missions || !s.missions.length) return;
+    if (!s.credit) s.credit = {};
+    var page = -1, slot = -1;
+    for (var p = s.spread * 2; p < Math.min(s.missions.length, s.spread * 2 + 2) && page < 0; p++) {
+      for (var k = 0; k < s.missions[p].length; k++) if (s.missions[p][k] === type && !s.filled[p][k]) { page = p; slot = k; break; }
+    }
+    if (page >= 0) s.filled[page][slot] = true;
+    else if (laterRoomOf(s, type) > 0) s.credit[type] = (s.credit[type] || 0) + 1;
+    while (s.spread * 2 + 2 < s.missions.length && s.filled.slice(s.spread * 2, s.spread * 2 + 2).every(function (p) { return p.every(Boolean); })) {
+      s.spread++;
+      for (var sp = s.spread * 2; sp < Math.min(s.missions.length, s.spread * 2 + 2); sp++) {
+        for (var sk = 0; sk < s.missions[sp].length; sk++) {
+          var st = s.missions[sp][sk];
+          if (!s.filled[sp][sk] && s.credit[st] > 0) { s.credit[st]--; nFill(s, sp, sk); }
+        }
+      }
+    }
+    function nFill(stObj, spIdx, skIdx) { stObj.filled[spIdx][skIdx] = true; }
   }
   function ruleAccess(s, t) {
     if (!t || s.removed[t.id]) return 'removed';
@@ -269,6 +341,7 @@
       if (s.tray.length + ids.length > s.cap) return { ok: false, reason: 'capacity' };
     } else if (action.type !== 'toggle') return { ok: false, reason: 'action' };
     var n = Object.assign({}, s, { removed: s.removed.slice(), revealed: s.revealed.slice(),
+      credit: Object.assign({}, s.credit || {}),
       opened: Object.assign({}, s.opened), coverOpened: Object.assign({}, s.coverOpened), coverOpening: Object.assign({}, s.coverOpening), tray: s.tray.slice(), filled: s.filled.map(function (p) { return p.slice(); }) });
     if (action.type === 'toggle') { n.flap = 1 - n.flap; return { ok: true, state: revealRules(n), ids: [], clears: [] }; }
     for (var j = 0; j < ids.length; j++) {
@@ -278,18 +351,35 @@
       n.tray.push(type);
       if (n.tray.filter(function (v) { return v === type; }).length < 3) continue;
       var page = -1, slot = -1;
-      if (gate && !gate(type, clears)) return { ok: false, reason: 'page' };
       for (var p = n.spread * 2; p < Math.min(n.missions.length, n.spread * 2 + 2) && page < 0; p++) {
         for (var k = 0; k < n.missions[p].length; k++) if (n.missions[p][k] === type && !n.filled[p][k]) { page = p; slot = k; break; }
       }
-      if (n.missions.length && page < 0 && n.decoys.indexOf(type) < 0) return { ok: false, reason: 'page' };
-      if (page >= 0) n.filled[page][slot] = true;
+      if (page >= 0) {
+        if (gate && !gate(type, clears)) continue;
+        n.filled[page][slot] = true;
+      } else if (laterRoomOf(n, type) > 0) {
+        /* Bộ 3 thuộc trang sau: gửi lên Kệ Đứng nếu còn chỗ; nếu Kệ Đứng đã ĐẦY thì không thể merge (nằm chờ trong khay)! */
+        var canStand = gate ? gate(type, clears) : (creditUsed(n) < (n.pocketCap || 2));
+        if (!canStand) continue;
+        n.credit[type] = (n.credit[type] || 0) + 1;
+      } else if (n.missions.length && n.decoys.indexOf(type) < 0) {
+        return { ok: false, reason: 'page' };
+      }
       var take = 3;
       n.tray = n.tray.filter(function (v) { if (v === type && take) { take--; return false; } return true; });
       n.merges++; clears.push(type);
     }
     n.covers.forEach(function (c) { if (c.holders.every(function (id) { return n.removed[id]; })) n.coverOpened[c.id] = true; });
-    while (n.spread * 2 + 2 < n.missions.length && n.filled.slice(n.spread * 2, n.spread * 2 + 2).every(function (p) { return p.every(Boolean); })) n.spread++;
+    while (n.spread * 2 + 2 < n.missions.length && n.filled.slice(n.spread * 2, n.spread * 2 + 2).every(function (p) { return p.every(Boolean); })) {
+      n.spread++;
+      for (var sp2 = n.spread * 2; sp2 < Math.min(n.missions.length, n.spread * 2 + 2); sp2++) {
+        for (var sk2 = 0; sk2 < n.missions[sp2].length; sk2++) {
+          var st2 = n.missions[sp2][sk2];
+          if (!n.filled[sp2][sk2] && n.credit[st2] > 0) { n.credit[st2]--; n.filled[sp2][sk2] = true; }
+        }
+      }
+      if (!gate) drainReadyTrayTriples(n);
+    }
     return { ok: true, state: revealRules(n), ids: ids, clears: clears };
   }
   function flapBounds(paper, edge, side) {
@@ -549,7 +639,7 @@
     levelConfig: levelConfig, dailyConfig: dailyConfig, pictureConfig: pictureConfig, PICS: PICS, huntTargets: huntTargets, buildLevel: buildLevel, redeal: redeal,
     starLimits: starLimits, starsFor: starsFor, coinReward: coinReward,
     replaySolution: replaySolution, playBot: playBot,
-    createRuleState: createRuleState, ruleAccess: ruleAccess, transition: transition, replayCampaign: replayCampaign,
+    createRuleState: createRuleState, ruleAccess: ruleAccess, transition: transition, recordRuleBurst: recordRuleBurst, replayCampaign: replayCampaign,
     memberCover: memberCover, coverContainsPoint: coverContainsPoint, coverAtPoint: coverAtPoint,
     revealRules: revealRules, flapBounds: flapBounds, flapCoversPoint: flapCoversPoint, nextWitnessAction: nextWitnessAction
   };

@@ -340,9 +340,11 @@ body.dev #play .hud .btn.bot-btn { display: inline-flex; }
   box-shadow: 0 2px 0 #2A2438; text-align: center;
 }
 .tut-viz {
+  flex: none; width: 100%; height: 104px; min-height: 104px;
   display: flex; justify-content: center; align-items: center;
   margin: 2px 0; border-radius: 14px; overflow: hidden;
 }
+.tut-viz canvas { display: block; flex: none; width: 290px; height: 104px; }
 #play .art-card.bump { animation: book-bump .32s cubic-bezier(.2,1.5,.45,1); }
 @keyframes book-bump {
   0% { transform: translateY(0) scale(1); }

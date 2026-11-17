@@ -24,7 +24,7 @@
     { tier: 'teach', pocketCap: 2, missions: [2, 2, 3, 3], kinds: 2, pool: 4, peak: 4, spread: 0.3, bottom: 0.7, decoys: 0, album: 1, chapter: 'beach', unlocks: [61, 64], sketch: SKETCH, mods: { tape: 0.14, gold: 4, twin: 2 }, salt: 1 },
     { tier: 'practice', pocketCap: 3, missions: [3, 3, 3, 3], kinds: 2, pool: 5, peak: 5, spread: 0.4, bottom: 0.55, decoys: 0, album: 2, chapter: 'beach', unlocks: [63, 65], sketch: SKETCH, mods: { mystery: 0.18, tape: 0.15, gold: 4, twin: 2 }, salt: 10 },
     { tier: 'practice', pocketCap: 3, missions: [4, 4, 4, 4], kinds: 3, pool: 6, peak: 5, spread: 0.5, bottom: 0.45, decoys: 1, album: 3, chapter: 'beach', unlocks: [66, 67], sketch: SKETCH, mods: { mystery: 0.2, tape: 0.18, gold: 5, twin: 2, lock: 2 }, salt: 5 },
-    { tier: 'hard', pocketCap: 2, missions: [5, 5, 5, 5], kinds: 3, pool: 7, peak: 6, spread: 0.7, bottom: 0.35, decoys: 1, album: 4, chapter: 'beach', unlocks: [68, 69], sketch: SKETCH, mods: { mystery: 0.22, tape: 0.2, gold: 6, twin: 3, lock: 3 }, salt: 21 }
+    { tier: 'hard', pocketCap: 2, missions: [5, 5, 5, 5], kinds: 3, pool: 7, peak: 6, spread: 0.7, bottom: 0.35, decoys: 1, album: 4, chapter: 'beach', unlocks: [68, 69], sketch: SKETCH, mods: { mystery: 0.22, tape: 0.2, gold: 6, twin: 3, lock: 3 }, salt: 3 }
   ];
   /* A chapter gives each page its own picture (imgL, imgR; fullL / fullR: the original illustration a full page
      fades into). A slot is [sticker id, x, y, size]: x and y are 0..1 of its page, size a share of the book's
@@ -59,11 +59,15 @@
         right: [[60, 0.25, 0.57, 0.62], [61, 0.77, 0.57, 0.62], [69, 0.51, 0.82, 0.24], [63, 0.21, 0.93, 0.14], [63, 0.82, 0.93, 0.14]] }
     ] }
   };
-  var CAMPAIGN_LEVELS = (PO.ScrapbookCampaign || []).map(function (record) {
+  var CAMPAIGN_LEVELS = (PO.ScrapbookCampaign || []).map(function (record, idx) {
     var copy = Object.assign({}, record);
     var s = CAMPAIGN_STORIES[copy.story];
     if (s) { copy.album = s.album; copy.scenes = s.scenes; }
     copy.hard = copy.tier === 'hard';
+    /* Giới hạn chỗ đứng sticker trang sau trên Kệ Diorama: 2 chỗ ở màn đầu / màn KHÓ, 3 chỗ ở màn thường rộng hơn. */
+    if (copy.pocketCap == null) {
+      copy.pocketCap = (copy.hard || idx < 10) ? 2 : 3;
+    }
     return copy;
   });
 
@@ -98,6 +102,7 @@
       n: srcIdx + 1, seed: 4241 + srcIdx * 7919 + (p.salt || 0) * 31, album: p.album, mixed: true, quilt: true, trayTop: true,
       triples: targets.length + decoys.length, pool: targets.concat(decoys), peak: p.peak, spread: p.spread,
       bottom: bottom, shape: SHAPES[srcIdx % SHAPES.length], mods: p.mods, tier: p.hard ? 'hard' : 'normal',
+      pocketCap: p.pocketCap || 2,
       scrapbook: p.scrapbook, missions: missions, decoys: decoys, intro: p.intro, role: p.role, decision: p.decision
     };
     return { def: p, cfg: cfg, missions: missions, targets: targets, decoys: decoys };
